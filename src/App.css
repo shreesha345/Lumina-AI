@@ -29,6 +29,19 @@
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
 }
 
+[data-theme='dark'] {
+  --surface: #1e293b;
+  --surface-dim: #0f172a;
+  --surface-hover: #334155;
+  --border: #334155;
+  --border-light: #475569;
+  --text: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+  --primary-50: #2d1c15;
+  --primary-100: #43200b;
+}
+
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   background: var(--surface-dim);
@@ -171,6 +184,26 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.theme-toggle {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.theme-toggle:hover {
+  background: var(--surface-hover);
+  color: var(--primary);
+  border-color: var(--primary-light);
 }
 
 .voice-btn {
