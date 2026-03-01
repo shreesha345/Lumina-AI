@@ -17,7 +17,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
                 this.ringBuffer[this.writePos % this.ringBuffer.length] = chunk[i];
                 this.writePos++;
             }
-            // Prevent overflow
+            // Prevent index overflow — normalize when both pointers are well past the buffer length
             if (this.readPos > this.ringBuffer.length * 2 && this.writePos > this.ringBuffer.length * 2) {
                 const offset = this.readPos - (this.readPos % this.ringBuffer.length);
                 this.readPos -= offset;
@@ -27,13 +27,16 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     }
 
     process(inputs, outputs, parameters) {
-        const output = outputs[0][0];
-        for (let i = 0; i < output.length; i++) {
+        const output = outputs[0];
+        if (!output || !output[0]) return true;
+
+        const channel = output[0];
+        for (let i = 0; i < channel.length; i++) {
             if (this.readPos < this.writePos) {
-                output[i] = this.ringBuffer[this.readPos % this.ringBuffer.length] / 32768.0;
+                channel[i] = this.ringBuffer[this.readPos % this.ringBuffer.length] / 32768.0;
                 this.readPos++;
             } else {
-                output[i] = 0;
+                channel[i] = 0;
             }
         }
         return true;
