@@ -9,6 +9,8 @@ import { convertToExcalidrawElements } from "@excalidraw/excalidraw";
 
 export interface ExcalidrawAPI {
     getSceneElements: () => any[];
+    getAppState: () => any;
+    getFiles: () => any;
     updateScene: (params: { elements: any[] }) => void;
     scrollToContent: (elements?: any[]) => void;
     addFiles: (files: any[]) => void;
@@ -18,11 +20,29 @@ export interface ExcalidrawAPI {
 
 const POINTER_PREFIX = "__pointer_";
 
-// ─── Function Declarations for Gemini Live API ───
+// ─── Function Declarations for Gemini Live API (Manager Agent) ───
+// The Live agent only has two tools:
+// 1. draw_on_canvas — delegates to the Gemini 2.0 Flash tool agent
+// 2. view_canvas — captures a snapshot of the canvas
 
-export const getCanvasDeclaration = {
-    name: "get_canvas",
-    description: "Returns all elements currently on the canvas as JSON.",
+export const drawOnCanvasDeclaration = {
+    name: "draw_on_canvas",
+    description: "Send a drawing request to the specialized canvas agent (Gemini 2.0 Flash). The agent will generate and execute Excalidraw diagrams, SVG illustrations, flowcharts, creative art, etc. on the canvas. Provide a detailed natural language description of what to draw, including colors, style, and layout. Examples: 'Draw a red heart with pink outline', 'Create a flowchart of user authentication with blue and green boxes', 'Draw a colorful butterfly', 'Illustrate the solar system with labeled planets'.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            request: {
+                type: Type.STRING,
+                description: "Detailed natural language description of what to draw on the canvas. Be specific about colors, layout, style, and content.",
+            },
+        },
+        required: ["request"],
+    },
+};
+
+export const viewCanvasDeclaration = {
+    name: "view_canvas",
+    description: "Capture a visual snapshot of the Excalidraw canvas to see what is currently drawn. Use this when you want to visually inspect the canvas contents — for example, to review a diagram you just drew, see what the student has drawn, or understand the current state of the whiteboard. Returns the canvas as an image you can see.",
     parameters: {
         type: Type.OBJECT,
         properties: {},
@@ -30,41 +50,21 @@ export const getCanvasDeclaration = {
     },
 };
 
-export const updateSceneDeclaration = {
-    name: "update_scene",
-    description: "Draw on the canvas. Set elements_json to a JSON array string of elements. Set clear_first to 'yes' to wipe canvas before drawing. Set to 'pointer' with pointer_x,pointer_y to show a laser pointer. Set to 'clear_pointer' to remove pointer. Set to 'clear_all' to clear canvas.",
+export const inspectCanvasDeclaration = {
+    name: "inspect_canvas",
+    description: "Get structured data about all elements currently on the canvas, including their types, positions, dimensions, and colors. Returns element details as JSON. Use this to understand the canvas layout, check if images are present, find positions of elements, or determine where to place new content. Especially useful before drawing to avoid overlapping user-uploaded images or existing content.",
     parameters: {
         type: Type.OBJECT,
-        properties: {
-            clear_first: {
-                type: Type.STRING,
-                description: "'yes' to clear canvas, 'no' to append, 'pointer' to move pointer, 'clear_pointer' to remove pointer, 'clear_all' to clear everything.",
-            },
-            elements_json: {
-                type: Type.STRING,
-                description: 'JSON array string of elements to draw. Each needs type,x,y. Shapes need labelText. Example: [{"type":"rectangle","id":"a","x":100,"y":100,"width":200,"height":80,"labelText":"My Box","backgroundColor":"#a5d8ff"}]',
-            },
-            pointer_x: {
-                type: Type.STRING,
-                description: "X coordinate for pointer as string number",
-            },
-            pointer_y: {
-                type: Type.STRING,
-                description: "Y coordinate for pointer as string number",
-            },
-            pointer_label: {
-                type: Type.STRING,
-                description: "Label for the pointer",
-            },
-        },
-        required: ["clear_first"],
+        properties: {},
+        required: [],
     },
 };
 
 // ─── All tool declarations bundled for the Live API config ───
 export const canvasToolDeclarations = [
-    getCanvasDeclaration,
-    updateSceneDeclaration,
+    drawOnCanvasDeclaration,
+    viewCanvasDeclaration,
+    inspectCanvasDeclaration,
 ];
 
 function toExcalidrawSkeleton(elements: any[]): any[] {
@@ -82,14 +82,15 @@ function toExcalidrawSkeleton(elements: any[]): any[] {
     }
 
     // ── Pass 2: Convert each element to Excalidraw skeleton ──
-    return elements.map((el) => {
+    return elements.map((el, idx) => {
         const skeleton: any = {
             type: el.type,
             x: el.x ?? 0,
             y: el.y ?? 0,
         };
 
-        if (el.id) skeleton.id = el.id;
+        // Always ensure a unique ID — prevents 'Duplicate id found for undefined'
+        skeleton.id = el.id || `el_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 8)}`;
 
         // Dimensions
         if (el.width != null) skeleton.width = el.width;
@@ -191,6 +192,18 @@ function toExcalidrawSkeleton(elements: any[]): any[] {
                 // Default: use width/height as direction
                 skeleton.points = [[0, 0], [el.width || 200, el.height || 0]];
             }
+        }
+
+        // ── Freedraw elements ──
+        if (el.type === "freedraw") {
+            skeleton.points = el.points || [[0, 0]];
+            if (el.simulatePressure !== undefined) skeleton.simulatePressure = el.simulatePressure;
+            if (el.pressures) skeleton.pressures = el.pressures;
+        }
+
+        // ── Safety: any element with points that wasn't handled above ──
+        if (el.points && !skeleton.points) {
+            skeleton.points = el.points;
         }
 
         return skeleton;
@@ -305,7 +318,8 @@ export async function executeCanvasTool(
     }
 
     switch (toolName) {
-        case "get_canvas": {
+        case "get_canvas":
+        case "inspect_canvas": {
             const elements = excalidrawApi.getSceneElements();
             const simplified = elements
                 .filter((e: any) => !e.isDeleted && !e.id?.startsWith(POINTER_PREFIX))
@@ -320,10 +334,35 @@ export async function executeCanvasTool(
                     ...(e.containerId ? { containerId: e.containerId } : {}),
                     strokeColor: e.strokeColor,
                     backgroundColor: e.backgroundColor,
+                    ...(e.type === "image" ? { isImage: true, fileId: e.fileId } : {}),
                 }));
+
+            // Compute bounding box of all images for spatial awareness
+            const images = simplified.filter((e: any) => e.type === "image");
+            let imageBounds = null;
+            if (images.length > 0) {
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                for (const img of images) {
+                    minX = Math.min(minX, img.x);
+                    minY = Math.min(minY, img.y);
+                    maxX = Math.max(maxX, img.x + img.width);
+                    maxY = Math.max(maxY, img.y + img.height);
+                }
+                imageBounds = {
+                    x: minX, y: minY,
+                    width: maxX - minX, height: maxY - minY,
+                    rightEdge: maxX, bottomEdge: maxY,
+                };
+            }
+
             return {
                 elementCount: simplified.length,
+                imageCount: images.length,
+                ...(imageBounds ? { imageBounds } : {}),
                 elements: simplified,
+                hint: images.length > 0
+                    ? `There are ${images.length} image(s) on the canvas. Place new content to the RIGHT of these images (x > ${imageBounds!.rightEdge + 150}) to avoid overlap.`
+                    : "Canvas has no images — you can place content anywhere.",
             };
         }
 
@@ -408,15 +447,58 @@ export async function executeCanvasTool(
 
             // Get current elements (optionally clear first)
             let existingElements: any[] = [];
-            if (mode !== "yes") { // "yes" means clear first, so existingElements should be empty
+            if (mode !== "yes") {
+                // "no" mode — append to everything
                 existingElements = [...excalidrawApi.getSceneElements()];
+            } else {
+                // "yes" mode — clear canvas but PRESERVE image elements (user-uploaded content)
+                existingElements = excalidrawApi.getSceneElements().filter(
+                    (e: any) => e.type === "image" && !e.isDeleted
+                );
+            }
+
+            // If images were preserved, offset new elements to the RIGHT of images
+            // so nothing overlaps — gives a clean side-by-side layout
+            const preservedImages = existingElements.filter((e: any) => e.type === "image");
+            if (preservedImages.length > 0 && mode === "yes") {
+                // Find the rightmost edge of all images
+                let maxRight = 0;
+                for (const img of preservedImages) {
+                    const right = (img.x || 0) + (img.width || 0);
+                    if (right > maxRight) maxRight = right;
+                }
+
+                // Find the leftmost x of new elements to calculate shift
+                let minNewX = Infinity;
+                for (const el of inputElements) {
+                    if (el.x != null && el.x < minNewX) minNewX = el.x;
+                }
+                if (!isFinite(minNewX)) minNewX = 0;
+
+                const OFFSET_PADDING = 150; // spacing between image and new content
+                const shiftX = maxRight + OFFSET_PADDING - minNewX;
+
+                // Shift all input elements before skeleton conversion
+                // (arrows with startId/endId auto-calc from shape positions, so this is safe)
+                for (const el of inputElements) {
+                    el.x = (el.x || 0) + shiftX;
+                }
+
+                // Re-convert after shifting
+                const shiftedSkeletons = toExcalidrawSkeleton(inputElements);
+                try {
+                    newElements = convertToExcalidrawElements(shiftedSkeletons as any, { regenerateIds: false });
+                } catch (err) {
+                    console.error("[AI Tools] Re-conversion after shift failed:", err);
+                    // Fall back to unshifted elements — better than nothing
+                }
             }
 
             excalidrawApi.updateScene({
                 elements: [...existingElements, ...newElements],
             });
 
-            // Auto-scroll to see the new content
+            // Auto-scroll to fit everything (images + new content)
             try {
                 excalidrawApi.scrollToContent();
             } catch (e) { }
@@ -425,6 +507,104 @@ export async function executeCanvasTool(
                 success: true,
                 addedCount: newElements.length,
                 message: `Drew ${newElements.length} elements on the canvas.`,
+            };
+        }
+
+        case "add_svg": {
+            const { svg_code, x: xStr, y: yStr, width: wStr, height: hStr, label } = toolArgs;
+
+            if (!svg_code || typeof svg_code !== "string") {
+                return { error: "svg_code is required and must be a non-empty SVG string." };
+            }
+
+            // Ensure the SVG has xmlns attribute for proper rendering
+            let svgString = svg_code.trim();
+            if (!svgString.startsWith("<svg")) {
+                return { error: "svg_code must start with an <svg> element." };
+            }
+            if (!svgString.includes('xmlns')) {
+                svgString = svgString.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+            }
+
+            // Parse dimensions from SVG viewBox or width/height attributes
+            let svgW = 300, svgH = 300;
+            const viewBoxMatch = svgString.match(/viewBox=["']([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)["']/);
+            if (viewBoxMatch) {
+                svgW = parseFloat(viewBoxMatch[3]);
+                svgH = parseFloat(viewBoxMatch[4]);
+            } else {
+                const wMatch = svgString.match(/width=["'](\d+)/);
+                const hMatch = svgString.match(/height=["'](\d+)/);
+                if (wMatch) svgW = parseInt(wMatch[1]);
+                if (hMatch) svgH = parseInt(hMatch[1]);
+            }
+
+            const posX = xStr ? parseFloat(xStr) : 100;
+            const posY = yStr ? parseFloat(yStr) : 100;
+            const displayW = wStr ? parseFloat(wStr) : svgW;
+            const displayH = hStr ? parseFloat(hStr) : svgH;
+
+            // Convert SVG to base64 data URL
+            const encoded = unescape(encodeURIComponent(svgString));
+            const base64 = btoa(encoded);
+            const dataURL = `data:image/svg+xml;base64,${base64}`;
+
+            // Generate a unique file ID
+            const fileId = `svg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+            // Register the SVG file with Excalidraw
+            excalidrawApi.addFiles([{
+                id: fileId as any,
+                mimeType: "image/svg+xml" as any,
+                dataURL: dataURL as any,
+                created: Date.now(),
+            }]);
+
+            // Create the image element
+            const imageElement: any = {
+                type: "image",
+                x: posX,
+                y: posY,
+                width: displayW,
+                height: displayH,
+                fileId: fileId,
+                status: "saved",
+                id: fileId + "_el",
+            };
+
+            const newElements: any[] = [imageElement];
+
+            // Optionally add a label below the image
+            if (label && typeof label === "string" && label.trim()) {
+                newElements.push({
+                    type: "text",
+                    x: posX + displayW / 2 - (label.length * 5),
+                    y: posY + displayH + 10,
+                    text: label,
+                    fontSize: 18,
+                    id: fileId + "_label",
+                });
+            }
+
+            // Convert skeletons and add to scene
+            let converted: any[];
+            try {
+                converted = convertToExcalidrawElements(newElements as any, { regenerateIds: false });
+            } catch (err) {
+                console.error("[AI Tools] SVG element conversion failed:", err);
+                return { error: "Failed to convert SVG element: " + String(err) };
+            }
+
+            const existingElements = [...excalidrawApi.getSceneElements()];
+            excalidrawApi.updateScene({
+                elements: [...existingElements, ...converted],
+            });
+
+            try { excalidrawApi.scrollToContent(); } catch (e) { }
+
+            return {
+                success: true,
+                message: `Added SVG image (${displayW}×${displayH}) at (${posX}, ${posY})${label ? ` with label "${label}"` : ""}`,
             };
         }
 
