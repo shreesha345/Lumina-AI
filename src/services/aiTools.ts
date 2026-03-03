@@ -60,11 +60,22 @@ export const inspectCanvasDeclaration = {
     },
 };
 
+export const viewScreenDeclaration = {
+    name: "view_screen",
+    description: "Capture a visual snapshot of the user's shared screen. Use this when you need to see what the user is looking at outside of the Excalidraw canvas, or when the user explicitly asks you to look at their screen.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {},
+        required: [],
+    },
+};
+
 // ─── All tool declarations bundled for the Live API config ───
 export const canvasToolDeclarations = [
     drawOnCanvasDeclaration,
     viewCanvasDeclaration,
     inspectCanvasDeclaration,
+    viewScreenDeclaration,
 ];
 
 function toExcalidrawSkeleton(elements: any[]): any[] {
