@@ -31,6 +31,33 @@ Add SVG illustration to canvas. For creative drawings, icons, math, science, any
 | `width`,`height` | No | Display size (string numbers) |
 | `label` | No | Text below SVG |
 
+### SVG Animation Support
+SVGs that contain **SMIL animations** will automatically render as a live animated overlay on the canvas. The user can drag it anywhere and close it when done.
+
+**Animation triggers** — include ANY of these in your `svg_code` to activate the animated overlay:
+- `<animate>` — animate attribute values (fill, r, cx, opacity, etc.)
+- `<animateTransform>` — rotate, scale, translate over time
+- `<animateMotion>` — move elements along a path
+- `<set>` — set attribute at a time offset
+- CSS `@keyframes` + `animation:` in a `<style>` block
+
+**Example — pulsing circle:**
+```
+svg_code: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><circle cx="100" cy="100" r="40" fill="#74c0fc"><animate attributeName="r" values="30;50;30" dur="2s" repeatCount="indefinite"/><animate attributeName="opacity" values="1;0.5;1" dur="2s" repeatCount="indefinite"/></circle></svg>
+```
+
+**Example — orbiting element:**
+```
+svg_code: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300"><circle cx="150" cy="150" r="20" fill="#ffd43b"/><circle r="8" fill="#ff6b6b"><animateMotion dur="3s" repeatCount="indefinite"><mpath href="#o"/></animateMotion></circle><path id="o" d="M 50,150 A 100,100 0 1,1 50,150.01" fill="none"/></svg>
+```
+
+**When to use animations:**
+- Orbiting/rotating systems (solar system, electrons, gears)
+- Pulsing/breathing effects (highlights, attention)
+- Process flows with moving elements
+- Heartbeat, wave, loading visualizations
+- Any concept where motion aids understanding
+
 ---
 
 ## Element Format

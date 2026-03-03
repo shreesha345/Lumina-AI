@@ -73,6 +73,63 @@ function App() {
 
   // Canvas SVG overlay (for AI-generated SVG animations)
   const [svgOverlay, setSvgOverlay] = useState(null);
+  const svgOverlayTimerRef = useRef<any>(null);
+  const svgPipRef = useRef<HTMLDivElement>(null);
+  const svgPipDragRef = useRef({ dragging: false, startX: 0, startY: 0, origX: 0, origY: 0 });
+
+  // Drag handlers for the PiP panel
+  const handlePipDragStart = useCallback((e: React.MouseEvent) => {
+    const panel = svgPipRef.current;
+    if (!panel) return;
+    e.preventDefault();
+    const rect = panel.getBoundingClientRect();
+    const parentRect = panel.offsetParent?.getBoundingClientRect() || { left: 0, top: 0 };
+    svgPipDragRef.current = {
+      dragging: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: rect.left - parentRect.left,
+      origY: rect.top - parentRect.top,
+    };
+    const onMove = (ev: MouseEvent) => {
+      const d = svgPipDragRef.current;
+      if (!d.dragging || !svgPipRef.current) return;
+      const dx = ev.clientX - d.startX;
+      const dy = ev.clientY - d.startY;
+      svgPipRef.current.style.left = `${d.origX + dx}px`;
+      svgPipRef.current.style.top = `${d.origY + dy}px`;
+      svgPipRef.current.style.right = 'auto';
+      svgPipRef.current.style.bottom = 'auto';
+    };
+    const onUp = () => {
+      svgPipDragRef.current.dragging = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, []);
+
+  // Listen for animated SVG events from aiTools
+  useEffect(() => {
+    const handler = (e: any) => {
+      const { svgHtml, label } = e.detail || {};
+      if (!svgHtml) return;
+      // Wrap with optional label
+      const html = label
+        ? `${svgHtml}<div class="svg-overlay-label">${label}</div>`
+        : svgHtml;
+      setSvgOverlay(html);
+      // Auto-dismiss after 30s (user can close earlier)
+      if (svgOverlayTimerRef.current) clearTimeout(svgOverlayTimerRef.current);
+      svgOverlayTimerRef.current = setTimeout(() => setSvgOverlay(null), 30000);
+    };
+    window.addEventListener('svg-animation-overlay', handler);
+    return () => {
+      window.removeEventListener('svg-animation-overlay', handler);
+      if (svgOverlayTimerRef.current) clearTimeout(svgOverlayTimerRef.current);
+    };
+  }, []);
 
   // Theme state
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -534,12 +591,30 @@ function App() {
                 </Excalidraw>
               </div>
 
-              {/* SVG Overlay (for AI-generated SVG animations) */}
+              {/* SVG Animation PiP (draggable floating panel — canvas stays interactive) */}
               {svgOverlay && (
-                <div
-                  className="svg-animation-overlay"
-                  dangerouslySetInnerHTML={{ __html: svgOverlay }}
-                />
+                <div className="svg-pip-panel" ref={svgPipRef}>
+                  <div className="svg-pip-header" onMouseDown={handlePipDragStart}>
+                    <span className="svg-pip-title">▶ Animation</span>
+                    <button
+                      className="svg-pip-close"
+                      onClick={() => {
+                        setSvgOverlay(null);
+                        if (svgOverlayTimerRef.current) clearTimeout(svgOverlayTimerRef.current);
+                      }}
+                      title="Close animation"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div
+                    className="svg-pip-content"
+                    dangerouslySetInnerHTML={{ __html: svgOverlay }}
+                  />
+                </div>
               )}
 
               {/* Animation Viewer */}
