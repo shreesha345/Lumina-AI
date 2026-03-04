@@ -22,11 +22,15 @@ Draw on canvas. Required param: `clear_first`.
 Captures canvas as image for you to see. No parameters. Use after drawing to verify, or when user asks what's on canvas.
 
 ## add_svg
-Add SVG illustration to canvas. For creative drawings, icons, math, science, anything with curves/paths/gradients.
+Add SVG to canvas. Supports **BOTH static AND animated** content.
+
+**Use for:**
+- **ALL animations** — only SVG can animate (via SMIL or CSS). Excalidraw JSON has zero animation support.
+- **Rich static illustrations** where Excalidraw is too limited — science diagrams, math graphs/plots, creative art, biology/chemistry/physics visuals, anything with curves, gradients, or organic shapes.
 
 | Param | Required | Description |
 |---|---|---|
-| `svg_code` | Yes | Complete `<svg>` with `viewBox` |
+| `svg_code` | Yes | Complete `<svg>` with `xmlns` and `viewBox` |
 | `x`,`y` | No | Position (string numbers, default "100") |
 | `width`,`height` | No | Display size (string numbers) |
 | `label` | No | Text below SVG |
@@ -115,6 +119,16 @@ Same as arrows, `"type":"line"`, no arrowheads default. Multi-point for custom s
 - Draw complete diagram in ONE `update_scene` call
 - Title 30-50px above first shapes, fontSize 28
 - `fillStyle:"solid"` required when using `backgroundColor`
+- Keep visuals neat: avoid overlaps between new diagrams, existing diagrams, images, and embeddables
+- If adding an animation overlay, place it beside diagrams (not on top of core labels/content)
+- Default to one clean visual per request unless user explicitly asks for multiple
+
+## Simplicity & Anti-Repeat Rules
+- Before drawing, use `get_canvas` to check whether a similar visual already exists
+- Do not redraw the same diagram repeatedly; refine or append only if needed
+- Prefer simple, clear structure over dense/over-decorated outputs
+- Use animation only when user asks for it or when motion is essential to explain the concept
+- If animation is not required, produce a static visual
 
 ## Workflows
 1. **New diagram**: `clear_first:"yes"` + full `elements_json`
@@ -196,3 +210,11 @@ Central ellipse → radiating branches with decreasing size/stroke per level.
 6. Always `"endArrowhead":"arrow"` on arrows
 7. ONE `update_scene` call per complete diagram
 8. For ANY creative/artistic drawing request → use `add_svg`
+9. **TOOL SELECTION — DO NOT MIX UP:**
+   - **Animation/motion → `add_svg` (ONLY option).** Excalidraw JSON has ZERO animation support.
+   - **Structured diagrams (flowcharts, matrices, trees, tables) → `update_scene` (HIGHLY recommended).** Excalidraw excels at boxes + arrows + text.
+   - **Rich static illustrations (science, math graphs, art, curves, gradients) → `add_svg`.** Excalidraw is too limited for these.
+   - SVG supports BOTH static and animated. Excalidraw JSON supports ONLY static structured layouts.
+10. Always use vibrant colors and visual polish — but keep composition simple and readable
+11. Never generate duplicate visuals in the same session unless the user explicitly asks to redraw
+12. Keep animation overlays and diagrams non-overlapping whenever possible

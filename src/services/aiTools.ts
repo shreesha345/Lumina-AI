@@ -58,7 +58,7 @@ export const viewCanvasDeclaration = {
 
 export const inspectCanvasDeclaration = {
     name: "inspect_canvas",
-    description: "Get structured data about all elements currently on the canvas, including their types, positions, dimensions, and colors. Returns element details as JSON. Use this to understand the canvas layout, check if images are present, find positions of elements, or determine where to place new content. Especially useful before drawing to avoid overlapping user-uploaded images or existing content.",
+    description: "Get structured data about all elements currently on the canvas, including their types, positions, dimensions, and colors. Returns element details as JSON. Use this to understand the canvas layout, check if images or embedded videos (YouTube, iframes) are present, find positions of elements, or determine where to place new content. Especially useful before drawing to avoid overlapping user-uploaded images, embedded videos, or existing content.",
     parameters: {
         type: Type.OBJECT,
         properties: {},
@@ -352,34 +352,45 @@ export async function executeCanvasTool(
                     strokeColor: e.strokeColor,
                     backgroundColor: e.backgroundColor,
                     ...(e.type === "image" ? { isImage: true, fileId: e.fileId } : {}),
+                    ...(["embeddable", "iframe"].includes(e.type) ? { isEmbeddable: true, link: e.link || null } : {}),
                 }));
 
             // Compute bounding box of all images for spatial awareness
             const images = simplified.filter((e: any) => e.type === "image");
-            let imageBounds = null;
-            if (images.length > 0) {
+            const embeddables = simplified.filter((e: any) => ["embeddable", "iframe"].includes(e.type));
+            const userContent = [...images, ...embeddables]; // items to preserve & avoid overlapping
+            let userContentBounds = null;
+            if (userContent.length > 0) {
                 let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-                for (const img of images) {
-                    minX = Math.min(minX, img.x);
-                    minY = Math.min(minY, img.y);
-                    maxX = Math.max(maxX, img.x + img.width);
-                    maxY = Math.max(maxY, img.y + img.height);
+                for (const item of userContent) {
+                    minX = Math.min(minX, item.x);
+                    minY = Math.min(minY, item.y);
+                    maxX = Math.max(maxX, item.x + item.width);
+                    maxY = Math.max(maxY, item.y + item.height);
                 }
-                imageBounds = {
+                userContentBounds = {
                     x: minX, y: minY,
                     width: maxX - minX, height: maxY - minY,
                     rightEdge: maxX, bottomEdge: maxY,
                 };
             }
 
+            // Build hint message
+            const hintParts: string[] = [];
+            if (images.length > 0) hintParts.push(`${images.length} image(s)`);
+            if (embeddables.length > 0) hintParts.push(`${embeddables.length} embedded video(s)/iframe(s) (e.g. YouTube)`);
+
             return {
                 elementCount: simplified.length,
                 imageCount: images.length,
-                ...(imageBounds ? { imageBounds } : {}),
+                embeddableCount: embeddables.length,
+                ...(userContentBounds ? { userContentBounds } : {}),
+                // Keep legacy imageBounds alias for backward compat
+                ...(userContentBounds ? { imageBounds: userContentBounds } : {}),
                 elements: simplified,
-                hint: images.length > 0
-                    ? `There are ${images.length} image(s) on the canvas. Place new content to the RIGHT of these images (x > ${imageBounds!.rightEdge + 150}) to avoid overlap.`
-                    : "Canvas has no images — you can place content anywhere.",
+                hint: hintParts.length > 0
+                    ? `There are ${hintParts.join(' and ')} on the canvas. These are user-placed content — NEVER remove or overwrite them. Place new content to the RIGHT of them (x > ${userContentBounds!.rightEdge + 150}) to avoid overlap.`
+                    : "Canvas has no images or embeddables — you can place content anywhere.",
             };
         }
 
@@ -468,20 +479,22 @@ export async function executeCanvasTool(
                 // "no" mode — append to everything
                 existingElements = [...excalidrawApi.getSceneElements()];
             } else {
-                // "yes" mode — clear canvas but PRESERVE image elements (user-uploaded content)
+                // "yes" mode — clear canvas but PRESERVE image and embeddable elements (user content)
                 existingElements = excalidrawApi.getSceneElements().filter(
-                    (e: any) => e.type === "image" && !e.isDeleted
+                    (e: any) => (e.type === "image" || e.type === "embeddable" || e.type === "iframe") && !e.isDeleted
                 );
             }
 
-            // If images were preserved, offset new elements to the RIGHT of images
+            // If images/embeddables were preserved, offset new elements to the RIGHT
             // so nothing overlaps — gives a clean side-by-side layout
-            const preservedImages = existingElements.filter((e: any) => e.type === "image");
-            if (preservedImages.length > 0 && mode === "yes") {
-                // Find the rightmost edge of all images
+            const preservedUserContent = existingElements.filter(
+                (e: any) => e.type === "image" || e.type === "embeddable" || e.type === "iframe"
+            );
+            if (preservedUserContent.length > 0 && mode === "yes") {
+                // Find the rightmost edge of all preserved user content
                 let maxRight = 0;
-                for (const img of preservedImages) {
-                    const right = (img.x || 0) + (img.width || 0);
+                for (const item of preservedUserContent) {
+                    const right = (item.x || 0) + (item.width || 0);
                     if (right > maxRight) maxRight = right;
                 }
 
@@ -573,12 +586,19 @@ export async function executeCanvasTool(
             // and skip embedding the static image on the canvas
             if (hasAnimation) {
                 window.dispatchEvent(new CustomEvent('svg-animation-overlay', {
-                    detail: { svgHtml: svgString, label },
+                    detail: {
+                        svgHtml: svgString,
+                        label,
+                        x: posX,
+                        y: posY,
+                        width: displayW,
+                        height: displayH,
+                    },
                 }));
-                console.log("[AI Tools] Animated SVG detected — rendering as live overlay only");
+                console.log("[AI Tools] Animated SVG detected — rendering as live overlay at", posX, posY);
                 return {
                     success: true,
-                    message: `Animated SVG shown as live overlay${label ? ` with label "${label}"` : ""}. The user can drag it anywhere and close it when done.`,
+                    message: `Animated SVG shown as live overlay at (${posX}, ${posY})${label ? ` with label "${label}"` : ""}. Multiple animations can coexist on the canvas. The user can drag them anywhere and close them individually.`,
                 };
             }
 

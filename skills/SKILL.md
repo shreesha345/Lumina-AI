@@ -218,6 +218,10 @@ Also add `boundElements` to the connected shapes:
 3. **Space elements well** - Leave 50-100px between elements
 4. **Align elements** - Use consistent x/y coordinates for visual alignment
 5. **Group related items** - Use matching `groupIds` arrays
+6. **Keep visuals neat** - Avoid overlapping key diagram blocks and labels
+7. **Avoid duplicates** - Do not generate the same diagram repeatedly; refine existing content when possible
+8. **Default to simple output** - Prefer one clear diagram over multiple dense visuals
+9. **Animation only when needed** - Use animated SVG only when user asks or motion is essential for understanding
 6. **Use the color palette** - Stick to Excalidraw's built-in colors for consistency
 
 ## Diagram Types You Can Create

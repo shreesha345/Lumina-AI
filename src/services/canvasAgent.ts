@@ -15,7 +15,7 @@ const toolAgentTools = [
     {
         name: "update_scene",
         description:
-            "Draw on the Excalidraw canvas. elements_json is a JSON array string of elements. clear_first: 'yes' to clear canvas first, 'no' to append, 'pointer' to show a laser pointer at pointer_x/pointer_y, 'clear_pointer' to remove pointer, 'clear_all' to clear everything.",
+            "Draw structured diagrams on the Excalidraw canvas using JSON elements. HIGHLY RECOMMENDED for: flowcharts, mind maps, architecture diagrams, matrices, tables, step-by-step math layouts, sequence diagrams, tree structures — anything primarily composed of BOXES + ARROWS + TEXT. ⚠️ CANNOT animate — has zero animation support. Never use for motion/animation. For rich illustrations needing curves/gradients/detail, use add_svg instead.",
         parameters: {
             type: Type.OBJECT,
             properties: {
@@ -39,7 +39,7 @@ const toolAgentTools = [
     {
         name: "add_svg",
         description:
-            "Add an SVG illustration to the canvas. Use for creative drawings, icons, science diagrams, math notation, or anything needing curves/paths/gradients.",
+            "Add an SVG to the canvas. Supports BOTH static AND animated content. Use for: (1) ALL animations — Excalidraw has NO animation support, only SVG can animate via SMIL/CSS. (2) Rich static illustrations where Excalidraw is too limited — science diagrams, math graphs, creative art, biology, chemistry, physics, anything with curves/gradients/organic shapes. Animated SVGs auto-render as live draggable overlay panels. Multiple can coexist.",
         parameters: {
             type: Type.OBJECT,
             properties: {
@@ -68,32 +68,70 @@ const toolAgentTools = [
     },
 ];
 
-const TOOL_AGENT_SYSTEM = `You are a canvas drawing agent. You receive drawing/diagram requests and execute them using your tools.
+const TOOL_AGENT_SYSTEM = `You are a world-class visual canvas agent. You create stunning, highly polished educational visuals.
 
-You have these tools:
-- update_scene: Draw shapes, arrows, text, diagrams on the Excalidraw canvas
-- add_svg: Add SVG illustrations (hearts, stars, animals, creative art, science diagrams, etc.)
-- get_canvas: Check what's currently on the canvas
+You have two drawing tools. Choosing the RIGHT one is critical:
 
-IMPORTANT RULES:
-- **ALWAYS call get_canvas FIRST** before drawing anything. This lets you see existing content (especially user-uploaded images) and avoid overlapping them.
-- If the canvas has **images**, you MUST place your new content to the RIGHT of them with at least 150px spacing. Use the imageBounds.rightEdge value from get_canvas to calculate your starting x position. For example, if rightEdge is 600, start your content at x >= 750.
-- **NEVER clear or remove images.** When using clear_first: 'yes', images are automatically preserved — but you still need to position your content beside them.
-- Always execute the drawing. Never just describe what you would draw — actually call the tools.
-- Use vibrant colors. Never default to black and white.
-- For creative/artistic requests (hearts, stars, flowers, animals, etc.) → use add_svg
-- For diagrams, flowcharts, concept maps → use update_scene
-- You can call multiple tools in sequence if needed
-- Keep SVGs clean with xmlns and viewBox attributes
+## ⚠️ TOOL SELECTION — FOLLOW THIS EXACTLY
 
-**SVG ANIMATION SUPPORT:**
-When the request mentions "animated", "animation", "moving", "orbiting", "pulsing", "rotating", or any motion concept, use SMIL animation elements in your SVG:
-- \`<animate>\` for attribute transitions (r, cx, cy, fill, opacity, etc.)
-- \`<animateTransform>\` for rotate/scale/translate
-- \`<animateMotion>\` + \`<mpath>\` for path-following motion
-- Use \`repeatCount="indefinite"\` for looping animations
-- Use \`dur="Xs"\` to set animation speed (2-4s is good)
-The system automatically detects these elements and renders the SVG as a live animated overlay that the user can drag anywhere on the canvas.
+┌─────────────────────────────────────────────────────────────┐
+│  QUESTION 1: Does the request involve animation or motion?  │
+│  (animated, moving, orbiting, pulsing, rotating, spinning,  │
+│   flowing, beating, waving, etc.)                           │
+│                                                             │
+│  YES → use add_svg (ONLY SVG can animate. Period.)          │
+│  NO  → go to Question 2                                     │
+├─────────────────────────────────────────────────────────────┤
+│  QUESTION 2: Is it a structured layout?                     │
+│  (flowchart, mind map, matrix, table, architecture,         │
+│   tree, step-by-step math, sequence diagram, state machine) │
+│                                                             │
+│  YES → use update_scene (Excalidraw — HIGHLY RECOMMENDED    │
+│         for boxes + arrows + text layouts)                   │
+│  NO  → go to Question 3                                     │
+├─────────────────────────────────────────────────────────────┤
+│  QUESTION 3: Everything else — rich illustrations           │
+│  (science diagrams, math graphs, creative art, biology,     │
+│   chemistry, physics, curves, gradients, organic shapes,    │
+│   detailed drawings, icons)                                 │
+│                                                             │
+│  → use add_svg (SVG handles detail, curves, gradients       │
+│     far better than Excalidraw's limited shapes)            │
+└─────────────────────────────────────────────────────────────┘
+
+Summary:
+- add_svg supports BOTH static AND animated SVGs
+- update_scene (Excalidraw JSON) supports ONLY static structured layouts — NO animation capability whatsoever
+- NEVER attempt animation with update_scene. It will silently fail.
+- NEVER use update_scene for illustrations that need curves, gradients, or fine detail — Excalidraw is limited to basic geometric shapes.
+- DO use update_scene when the visual is primarily boxes, arrows, and text — it excels there.
+- Keep outputs simple and neat; avoid generating duplicate visuals.
+
+## VISUAL QUALITY STANDARDS (MANDATORY)
+- **Vibrant colors always.** Never black & white. Use gradients (\`<linearGradient>\`, \`<radialGradient>\`) for depth.
+- **Visual polish:** drop shadows, rounded shapes, varying stroke widths, subtle transparency.
+- **Layer elements:** backgrounds → mid-ground → foreground.
+- **Size generously:** SVGs 400–700px. Diagrams should fill available space.
+- **Color semantics:** Blue=info, Green=success, Yellow=decision, Red=danger, Purple=special.
+
+## ANIMATION RULES (SVG ONLY)
+- Use SMIL: \`<animate>\`, \`<animateTransform>\`, \`<animateMotion>\`, \`<set>\`
+- Or CSS \`@keyframes\` + \`animation:\` inside \`<style>\`
+- \`repeatCount="indefinite"\` for loops, \`dur="2s"\`–\`dur="4s"\` for pleasant speed
+- System auto-detects animated SVGs → renders as live draggable overlay panels
+- Use animation only if the user asked for it or motion is essential to explanation
+- Prefer one animation overlay at a time unless user explicitly requests multiple
+- Keep animation overlays away from core diagram labels/content (no clutter/overlap)
+
+## GENERAL RULES
+- **ALWAYS call get_canvas FIRST** to see existing content and avoid overlapping.
+- If images or embeddable elements (YouTube videos, iframes) exist, place new content to the RIGHT with 150px+ spacing.
+- **NEVER clear/remove user images OR embedded videos (YouTube, iframes).** These are user-placed content and must always be preserved.
+- Embeddable elements have type "embeddable" or "iframe" — treat them identically to images when deciding placement and preservation.
+- If a similar diagram already exists, do NOT redraw it; refine or append only what is missing.
+- Always execute — never just describe what you would draw.
+- SVGs must have \`xmlns\` and \`viewBox\`.
+- Combine both tools only when truly needed; default to one clean visual path.
 
 === CANVAS SKILLS REFERENCE ===
 ${skillsDoc}
@@ -110,6 +148,8 @@ export async function executeDrawingAgent(
     }
 
     const ai = new GoogleGenAI({ apiKey: API_KEY });
+    const animationRequested = /\b(animat(e|ed|ion)|moving|motion|orbit(ing)?|rotat(e|ing|ion)|puls(e|ing)|flow(ing)?|spin(ning)?|wave|beat(ing)?)\b/i.test(request);
+    const MAX_DRAW_CALLS = 1;
 
     try {
         // Initial request to the tool agent
@@ -125,9 +165,9 @@ export async function executeDrawingAgent(
 
         const executedTools: string[] = [];
         let iterations = 0;
-        const MAX_ITERATIONS = 3; // reduced — drawing should complete in 1-2 iterations
-        // Track whether a drawing tool has been executed (update_scene or add_svg)
-        let drawingDone = false;
+        const MAX_ITERATIONS = 6;
+        // Count how many drawing tool calls have been executed
+        let drawingCallCount = 0;
 
         // Agentic loop: keep processing tool calls until the model is done
         while (iterations < MAX_ITERATIONS) {
@@ -151,7 +191,21 @@ export async function executeDrawingAgent(
 
                 let result: any;
                 try {
-                    result = await executeCanvasTool(fc.name, fc.args || {}, excalidrawApi);
+                    const isDrawingTool = fc.name === "update_scene" || fc.name === "add_svg";
+
+                    if (isDrawingTool && drawingCallCount >= MAX_DRAW_CALLS) {
+                        result = {
+                            skipped: true,
+                            reason: "Only one drawing operation is allowed per request to keep output clean and non-duplicative.",
+                        };
+                    } else if (isDrawingTool && animationRequested && fc.name !== "add_svg") {
+                        result = {
+                            skipped: true,
+                            reason: "Animation-related request detected. Use add_svg only (update_scene cannot animate).",
+                        };
+                    } else {
+                        result = await executeCanvasTool(fc.name, fc.args || {}, excalidrawApi);
+                    }
                 } catch (err: any) {
                     console.error(`[Tool Agent] Error executing ${fc.name}:`, err);
                     result = { error: err.message || "Tool execution failed" };
@@ -163,19 +217,15 @@ export async function executeDrawingAgent(
                     response: result,
                 });
 
-                // If a drawing tool was executed, mark done
-                if (fc.name === "update_scene" || fc.name === "add_svg") {
-                    drawingDone = true;
+                // Track drawing tool calls
+                if ((fc.name === "update_scene" || fc.name === "add_svg") && !result?.skipped && !result?.error) {
+                    drawingCallCount++;
                 }
             }
 
-            // If we already drew something, return immediately — no need for another round-trip
-            if (drawingDone) {
-                console.log(`[Tool Agent] Drawing complete after ${iterations} iteration(s), skipping further rounds.`);
-                break;
-            }
-
-            // Only loop back for read-only tool calls (e.g., get_canvas)
+            // If no more function calls are expected (model returns text or stops), break
+            // Continue the loop to allow the model to issue more tool calls (e.g., multiple add_svg for multi-animation scenes)
+            // Send tool results back and let the model decide if it needs more calls
             response = await ai.models.generateContent({
                 model: TOOL_MODEL,
                 contents: [
