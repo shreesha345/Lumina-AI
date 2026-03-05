@@ -737,6 +737,182 @@ body {
   fill: white;
 }
 
+.open-pdf-canvas-btn {
+  margin-top: 10px;
+  background: linear-gradient(135deg, #0f766e, #0d9488);
+}
+
+.open-pdf-canvas-btn:hover {
+  box-shadow: 0 4px 12px rgba(13, 148, 136, 0.3);
+}
+
+.web-link-card {
+  background: var(--surface-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+
+.web-link-card h4 {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.web-link-row {
+  display: flex;
+  gap: 8px;
+}
+
+.web-link-input {
+  flex: 1;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.web-link-open-btn {
+  height: 34px;
+  border: none;
+  border-radius: 8px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffffff;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  cursor: pointer;
+}
+
+.pdf-overlay-panel {
+  position: absolute;
+  z-index: 1200;
+  max-width: calc(100% - 16px);
+  max-height: calc(100% - 16px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  overflow: visible;
+}
+
+@media (max-width: 900px) {
+  .pdf-overlay-panel {
+    left: 8px !important;
+    top: 8px !important;
+    width: calc(100% - 16px);
+    max-height: calc(100% - 16px);
+  }
+}
+
+.pdf-overlay-header {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-dim);
+  cursor: move;
+}
+
+.pdf-overlay-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pdf-overlay-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pdf-overlay-open {
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: #2563eb;
+}
+
+.pdf-overlay-close {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.pdf-browser-shell {
+  position: relative;
+  width: 100%;
+  height: calc(100% - 44px);
+  min-height: 220px;
+  background: radial-gradient(circle at 20% 0%, #15181c 0%, #0b0e12 60%, #06080b 100%);
+  padding: 8px;
+  border-radius: 0 0 12px 12px;
+}
+
+.pdf-view-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: #ffffff;
+  border-radius: 8px;
+}
+
+.pdf-view-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pdf-resize-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: #3b82f6;
+  border: 2px solid #ffffff;
+  border-radius: 3px;
+  z-index: 5;
+  opacity: 0.9;
+}
+
+.pdf-resize-n,
+.pdf-resize-s,
+.pdf-resize-e,
+.pdf-resize-w {
+  width: 14px;
+  height: 14px;
+}
+
+.pdf-resize-n { top: -7px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
+.pdf-resize-s { bottom: -7px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
+.pdf-resize-e { right: -7px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
+.pdf-resize-w { left: -7px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
+
+.pdf-resize-nw { top: -6px; left: -6px; cursor: nwse-resize; }
+.pdf-resize-ne { top: -6px; right: -6px; cursor: nesw-resize; }
+.pdf-resize-sw { bottom: -6px; left: -6px; cursor: nesw-resize; }
+.pdf-resize-se { bottom: -6px; right: -6px; cursor: nwse-resize; }
+
 /* ===== CHAT TAB ===== */
 .chat-tab {
   flex: 1;
@@ -975,6 +1151,53 @@ body {
   position: relative;
   overflow: hidden;
   background: var(--surface);
+}
+
+.canvas-area.pdf-drag-active {
+  outline: 2px dashed #0d9488;
+  outline-offset: -6px;
+}
+
+.canvas-pdf-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1190;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: rgba(13, 148, 136, 0.08);
+}
+
+.canvas-pdf-drop-card {
+  max-width: 460px;
+  margin: 0 16px;
+  padding: 18px 20px;
+  border-radius: 12px;
+  border: 1px solid rgba(13, 148, 136, 0.4);
+  background: rgba(255, 255, 255, 0.96);
+  color: #0f172a;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: var(--shadow-lg);
+}
+
+[data-theme='dark'] .canvas-pdf-drop-card {
+  background: rgba(10, 10, 10, 0.95);
+  color: #e5e7eb;
+  border-color: rgba(45, 212, 191, 0.5);
+}
+
+.canvas-pdf-drop-card strong {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.canvas-pdf-drop-card span {
+  font-size: 13px;
+  color: inherit;
+  opacity: 0.9;
 }
 
 /* ===== EXCALIDRAW OVERRIDES ===== */

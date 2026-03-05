@@ -73,6 +73,10 @@ Create a `.env` file in the project root:
 
 ```env
 VITE_GEMINI_API_KEY=your_gemini_api_key_here
+VITE_GEMINI_LIVE_MODEL=gemini-2.5-flash-native-audio-preview-12-2025
+VITE_GEMINI_TOOL_MODEL=gemini-3.1-flash-lite-preview
+VITE_GEMINI_VISION_MODEL=gemini-2.5-flash
+VITE_GEMINI_TOOL_THINKING_BUDGET=0
 ```
 
 ### Running
@@ -88,6 +92,28 @@ Open [http://127.0.0.1:5173](http://127.0.0.1:5173) in your browser.
 ```bash
 npm run build
 npm run preview
+```
+
+### Remotion (Docker)
+
+Render a sample Remotion video into `Sandbox/out/hello-remotion.mp4` using Docker:
+
+```bash
+docker compose -f Sandbox/docker-compose.remotion.yml up --build
+```
+
+Or with plain Docker:
+
+```bash
+docker build -f Sandbox/Dockerfile.remotion -t ai-tutor-gemini-remotion .
+docker run --rm -v ${PWD}/Sandbox/out:/app/Sandbox/out ai-tutor-gemini-remotion
+```
+
+Local (non-Docker) Remotion commands:
+
+```bash
+npm run remotion:studio
+npm run remotion:render
 ```
 
 ---
@@ -124,6 +150,8 @@ skills/                     # Excalidraw diagram skill files
 3. **Talk** — Hold the mic button (or press `Ctrl+Space`) and ask Lumina to explain something or draw a diagram.
 4. **Draw on the canvas** — You can also draw directly on the whiteboard. Lumina can see what you draw via the `view_canvas` tool.
 5. **Upload images** — Drop images onto the canvas. Lumina will place new drawings beside them without overlapping.
+6. **Open PDF on canvas** — After upload, click **Open PDF On Canvas**. You can zoom, switch pages, and drag to mark a region.
+7. **Ask about marked region** — Say or type: "Explain this marked section". Lumina uses the PDF selection to read text/equations/figures, then explains and can draw supporting visuals.
 
 ---
 

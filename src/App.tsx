@@ -6,6 +6,7 @@ import './App.css';
 
 import FileUpload from './components/FileUpload';
 import ChatHistory from './components/ChatHistory';
+import PdfCanvasOverlay from './components/PdfCanvasOverlay';
 import { parsePdf } from './services/pdfParser';
 import { useGeminiLive } from './hooks/useGeminiLive';
 
@@ -24,6 +25,12 @@ function App() {
   // PDF state
   const [paperData, setPaperData] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [pdfCanvasFile, setPdfCanvasFile] = useState<File | null>(null);
+  const [webCanvasUrl, setWebCanvasUrl] = useState<string | null>(null);
+  const [viewerTitle, setViewerTitle] = useState<string>('');
+  const [webInputUrl, setWebInputUrl] = useState('');
+  const [isCanvasPdfDragOver, setIsCanvasPdfDragOver] = useState(false);
+  const pdfDragDepthRef = useRef(0);
 
   // Chat state (separate per mode)
   const [liveMessages, setLiveMessages] = useState([]);
@@ -37,6 +44,30 @@ function App() {
 
   // Excalidraw API Reference
   const excalidrawApiRef = useRef(null);
+
+  const getPdfSelectionContext = useCallback(() => {
+    return null;
+  }, []);
+
+  const normalizeWebUrl = useCallback((raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return '';
+    if (/^https?:\/\//i.test(trimmed)) return trimmed;
+    return `https://${trimmed}`;
+  }, []);
+
+  const isPdfFile = useCallback((file: File | null | undefined) => {
+    if (!file) return false;
+    return file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
+  }, []);
+
+  const extractDroppedPdf = useCallback((dt: DataTransfer | null) => {
+    if (!dt || !dt.files || dt.files.length === 0) return null;
+    for (const file of Array.from(dt.files)) {
+      if (isPdfFile(file)) return file;
+    }
+    return null;
+  }, [isPdfFile]);
 
   // Live API Connection
   const {
@@ -52,7 +83,7 @@ function App() {
     stopRecording,
     startScreenShare,
     stopScreenShare,
-  } = useGeminiLive({ excalidrawApiRef });
+  } = useGeminiLive({ excalidrawApiRef, getPdfSelectionContext });
 
   // Connect when switching to Live mode
   useEffect(() => {
@@ -168,10 +199,13 @@ function App() {
   const handleFileUploaded = useCallback(async (file) => {
     setIsProcessing(true);
     setSidebarTab('chat');
+    setPdfCanvasFile(file);
+    setWebCanvasUrl(null);
+    setViewerTitle(file.name || 'PDF');
 
     try {
       const parsed = await parsePdf(file);
-      setPaperData(parsed);
+      setPaperData({ ...parsed, rawFile: file });
 
       // Add system message
       setMessages(prev => [...prev, {
@@ -195,6 +229,54 @@ function App() {
       setIsProcessing(false);
     }
   }, [setMessages]);
+
+  const handleOpenWebInCanvas = useCallback(() => {
+    const normalized = normalizeWebUrl(webInputUrl);
+    if (!normalized) return;
+    setPdfCanvasFile(null);
+    setWebCanvasUrl(normalized);
+    setViewerTitle(normalized);
+  }, [normalizeWebUrl, webInputUrl]);
+
+  const handleCanvasDragOverCapture = useCallback((e: React.DragEvent) => {
+    const pdfFile = extractDroppedPdf(e.dataTransfer);
+    if (!pdfFile) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setIsCanvasPdfDragOver(true);
+  }, [extractDroppedPdf]);
+
+  const handleCanvasDragEnterCapture = useCallback((e: React.DragEvent) => {
+    const pdfFile = extractDroppedPdf(e.dataTransfer);
+    if (!pdfFile) return;
+    e.preventDefault();
+    e.stopPropagation();
+    pdfDragDepthRef.current += 1;
+    setIsCanvasPdfDragOver(true);
+  }, [extractDroppedPdf]);
+
+  const handleCanvasDragLeaveCapture = useCallback((e: React.DragEvent) => {
+    const pdfFile = extractDroppedPdf(e.dataTransfer);
+    if (!pdfFile) return;
+    e.preventDefault();
+    e.stopPropagation();
+    pdfDragDepthRef.current = Math.max(0, pdfDragDepthRef.current - 1);
+    if (pdfDragDepthRef.current === 0) {
+      setIsCanvasPdfDragOver(false);
+    }
+  }, [extractDroppedPdf]);
+
+  const handleCanvasDropCapture = useCallback((e: React.DragEvent) => {
+    const pdfFile = extractDroppedPdf(e.dataTransfer);
+    if (!pdfFile) return;
+
+    // Intercept PDF drops before Excalidraw treats them as invalid scene files.
+    e.preventDefault();
+    e.stopPropagation();
+    pdfDragDepthRef.current = 0;
+    setIsCanvasPdfDragOver(false);
+    handleFileUploaded(pdfFile);
+  }, [extractDroppedPdf, handleFileUploaded]);
 
   // Handle sending a message
   const handleSendMessage = useCallback(() => {
@@ -519,6 +601,26 @@ function App() {
                       onFileUploaded={handleFileUploaded}
                       isProcessing={isProcessing}
                     />
+
+                    <div className="web-link-card">
+                      <h4>Open Webpage</h4>
+                      <div className="web-link-row">
+                        <input
+                          type="text"
+                          className="web-link-input"
+                          value={webInputUrl}
+                          onChange={(e) => setWebInputUrl(e.target.value)}
+                          placeholder="Paste webpage link (example.com)"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              handleOpenWebInCanvas();
+                            }
+                          }}
+                        />
+                        <button className="web-link-open-btn" onClick={handleOpenWebInCanvas}>Open</button>
+                      </div>
+                    </div>
+
                     {paperData && (
                       <div className="paper-summary">
                         <h4>Paper Loaded</h4>
@@ -554,6 +656,25 @@ function App() {
                           </svg>
                           Explain Paper
                         </button>
+                        <button
+                          className="explain-btn open-pdf-canvas-btn"
+                          onClick={() => {
+                            const sourceFile = (paperData as any)?.rawFile || null;
+                            if (sourceFile) {
+                              setPdfCanvasFile(sourceFile);
+                              setWebCanvasUrl(null);
+                              setViewerTitle(sourceFile.name || 'PDF');
+                            }
+                          }}
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <rect width="18" height="18" x="3" y="3" rx="2" />
+                            <path d="M8 7h8" />
+                            <path d="M8 12h8" />
+                            <path d="M8 17h5" />
+                          </svg>
+                          Open PDF On Canvas
+                        </button>
                       </div>
                     )}
                   </div>
@@ -578,7 +699,13 @@ function App() {
             </aside>
 
             {/* Canvas Area */}
-            <main className="canvas-area">
+            <main
+              className={`canvas-area ${isCanvasPdfDragOver ? 'pdf-drag-active' : ''}`}
+              onDragOverCapture={handleCanvasDragOverCapture}
+              onDragEnterCapture={handleCanvasDragEnterCapture}
+              onDragLeaveCapture={handleCanvasDragLeaveCapture}
+              onDropCapture={handleCanvasDropCapture}
+            >
               {/* Excalidraw Editor */}
               <div style={{
                 position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
@@ -645,6 +772,29 @@ function App() {
                   />
                 </div>
               ))}
+
+              {/* PDF panel overlay for zoom + marking */}
+              {(pdfCanvasFile || webCanvasUrl) && (
+                <PdfCanvasOverlay
+                  file={pdfCanvasFile}
+                  url={webCanvasUrl}
+                  title={viewerTitle}
+                  onClose={() => {
+                    setPdfCanvasFile(null);
+                    setWebCanvasUrl(null);
+                    setViewerTitle('');
+                  }}
+                />
+              )}
+
+              {isCanvasPdfDragOver && (
+                <div className="canvas-pdf-drop-overlay">
+                  <div className="canvas-pdf-drop-card">
+                    <strong>Drop PDF to open on canvas</strong>
+                    <span>It will load as a zoomable, scrollable PDF panel for marking and explanation.</span>
+                  </div>
+                </div>
+              )}
 
               {/* Animation Viewer */}
               {isAnimating && animatedSvg && (

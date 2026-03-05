@@ -27,9 +27,7 @@ export interface ExcalidrawAPI {
 const POINTER_PREFIX = "__pointer_";
 
 // ─── Function Declarations for Gemini Live API (Manager Agent) ───
-// The Live agent only has two tools:
-// 1. draw_on_canvas — delegates to the Gemini 2.0 Flash tool agent
-// 2. view_canvas — captures a snapshot of the canvas
+// Manager tools cover drawing delegation, canvas inspection/viewing, clearing, and screen viewing.
 
 export const drawOnCanvasDeclaration = {
     name: "draw_on_canvas",
@@ -66,9 +64,77 @@ export const inspectCanvasDeclaration = {
     },
 };
 
+export const clearCanvasDeclaration = {
+    name: "clear_canvas",
+    description: "Clear drawable teaching content from the Excalidraw canvas while preserving user-uploaded assets like images and embedded videos/iframes by default. Use this only when the user explicitly asks to clear/reset/start over, or when replacing an old diagram with a new one and the user has agreed.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            mode: {
+                type: Type.STRING,
+                description: "Clearing mode. Use 'teaching_only' (default) to clear non-user drawing content and preserve images/embeddables. Use 'all' only when the user explicitly asks to wipe everything.",
+            },
+        },
+        required: [],
+    },
+};
+
+export const clearCanvasSelectionDeclaration = {
+    name: "clear_canvas_selection",
+    description: "Clear only specific parts of the canvas (individual elements or one diagram) without wiping everything. Supports targeting by element IDs, by group ID, or by a bounding box region.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            mode: {
+                type: Type.STRING,
+                description: "Selection mode: 'ids', 'group', or 'bbox'.",
+            },
+            ids_csv: {
+                type: Type.STRING,
+                description: "Comma-separated element IDs to remove when mode='ids'. Example: 'id1,id2,id3'.",
+            },
+            group_id: {
+                type: Type.STRING,
+                description: "Group ID to remove when mode='group'. Removes all elements in that diagram group.",
+            },
+            x: {
+                type: Type.STRING,
+                description: "Left coordinate for bbox mode.",
+            },
+            y: {
+                type: Type.STRING,
+                description: "Top coordinate for bbox mode.",
+            },
+            width: {
+                type: Type.STRING,
+                description: "Width for bbox mode.",
+            },
+            height: {
+                type: Type.STRING,
+                description: "Height for bbox mode.",
+            },
+            include_user_assets: {
+                type: Type.STRING,
+                description: "'yes' to allow deleting images/embeddables/iframes in the selection. Default 'no' preserves them.",
+            },
+        },
+        required: ["mode"],
+    },
+};
+
 export const viewScreenDeclaration = {
     name: "view_screen",
     description: "Capture a visual snapshot of the user's shared screen. Use this when you need to see what the user is looking at outside of the Excalidraw canvas, or when the user explicitly asks you to look at their screen.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {},
+        required: [],
+    },
+};
+
+export const viewPdfSelectionDeclaration = {
+    name: "view_pdf_selection",
+    description: "Read the currently visible/marked area from the PDF overlay on the canvas. Use this when the user asks about content they highlighted in the PDF or asks for explanation of a specific PDF section.",
     parameters: {
         type: Type.OBJECT,
         properties: {},
@@ -81,6 +147,9 @@ export const canvasToolDeclarations = [
     drawOnCanvasDeclaration,
     viewCanvasDeclaration,
     inspectCanvasDeclaration,
+    clearCanvasDeclaration,
+    clearCanvasSelectionDeclaration,
+    viewPdfSelectionDeclaration,
     viewScreenDeclaration,
 ];
 
@@ -323,6 +392,28 @@ function removePointerElements(elements: any[]): any[] {
     return elements.filter((e: any) => !e.id?.startsWith(POINTER_PREFIX));
 }
 
+function parseCsvIds(input: any): string[] {
+    if (!input || typeof input !== "string") return [];
+    return input
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+}
+
+function intersectsBBox(el: any, box: { x: number; y: number; width: number; height: number }): boolean {
+    const ex = Number(el.x || 0);
+    const ey = Number(el.y || 0);
+    const ew = Number(el.width || 0);
+    const eh = Number(el.height || 0);
+    const rx1 = box.x;
+    const ry1 = box.y;
+    const rx2 = box.x + box.width;
+    const ry2 = box.y + box.height;
+    const ex2 = ex + ew;
+    const ey2 = ey + eh;
+    return ex < rx2 && ex2 > rx1 && ey < ry2 && ey2 > ry1;
+}
+
 // ─── Main Tool Execution ───
 
 export async function executeCanvasTool(
@@ -391,6 +482,122 @@ export async function executeCanvasTool(
                 hint: hintParts.length > 0
                     ? `There are ${hintParts.join(' and ')} on the canvas. These are user-placed content — NEVER remove or overwrite them. Place new content to the RIGHT of them (x > ${userContentBounds!.rightEdge + 150}) to avoid overlap.`
                     : "Canvas has no images or embeddables — you can place content anywhere.",
+            };
+        }
+
+        case "clear_canvas": {
+            const mode = (toolArgs?.mode || "teaching_only").toLowerCase().trim();
+            const sceneElements = excalidrawApi.getSceneElements();
+
+            if (mode === "all") {
+                excalidrawApi.updateScene({ elements: [] });
+                return {
+                    success: true,
+                    mode: "all",
+                    message: "Canvas fully cleared.",
+                };
+            }
+
+            // Default/safe behavior: clear tutor drawings but preserve user assets.
+            const preserved = sceneElements.filter(
+                (e: any) => (e.type === "image" || e.type === "embeddable" || e.type === "iframe") && !e.isDeleted
+            );
+
+            excalidrawApi.updateScene({ elements: preserved });
+
+            return {
+                success: true,
+                mode: "teaching_only",
+                preservedCount: preserved.length,
+                message: preserved.length > 0
+                    ? `Cleared teaching drawings and kept ${preserved.length} user asset(s).`
+                    : "Cleared teaching drawings.",
+            };
+        }
+
+        case "clear_canvas_selection": {
+            const mode = (toolArgs?.mode || "").toLowerCase().trim();
+            const includeUserAssets = (toolArgs?.include_user_assets || "no").toLowerCase().trim() === "yes";
+            const sceneElements = excalidrawApi.getSceneElements();
+
+            if (!["ids", "group", "bbox"].includes(mode)) {
+                return { error: "Invalid mode. Use 'ids', 'group', or 'bbox'." };
+            }
+
+            const isProtectedUserAsset = (e: any) =>
+                !includeUserAssets && (e.type === "image" || e.type === "embeddable" || e.type === "iframe");
+
+            const idsToRemove = new Set<string>();
+
+            if (mode === "ids") {
+                const ids = parseCsvIds(toolArgs?.ids_csv);
+                if (ids.length === 0) {
+                    return { error: "mode='ids' requires ids_csv with at least one element id." };
+                }
+                for (const id of ids) idsToRemove.add(id);
+            }
+
+            if (mode === "group") {
+                const groupId = String(toolArgs?.group_id || "").trim();
+                if (!groupId) {
+                    return { error: "mode='group' requires group_id." };
+                }
+                for (const el of sceneElements) {
+                    if (Array.isArray(el.groupIds) && el.groupIds.includes(groupId)) {
+                        idsToRemove.add(el.id);
+                    }
+                }
+                if (idsToRemove.size === 0) {
+                    return { success: true, removedCount: 0, message: `No elements found for group '${groupId}'.` };
+                }
+            }
+
+            if (mode === "bbox") {
+                const x = parseFloat(toolArgs?.x);
+                const y = parseFloat(toolArgs?.y);
+                const width = parseFloat(toolArgs?.width);
+                const height = parseFloat(toolArgs?.height);
+
+                if ([x, y, width, height].some((n) => Number.isNaN(n))) {
+                    return { error: "mode='bbox' requires numeric x, y, width, height." };
+                }
+                if (width <= 0 || height <= 0) {
+                    return { error: "bbox width and height must be > 0." };
+                }
+
+                for (const el of sceneElements) {
+                    if (intersectsBBox(el, { x, y, width, height })) {
+                        idsToRemove.add(el.id);
+                    }
+                }
+            }
+
+            const beforeCount = sceneElements.length;
+            const keptElements = sceneElements.filter((el: any) => {
+                if (el.isDeleted) return true;
+                if (el.id?.startsWith(POINTER_PREFIX)) return true;
+                if (!idsToRemove.has(el.id)) return true;
+                if (isProtectedUserAsset(el)) return true;
+                return false;
+            });
+
+            const removedCount = beforeCount - keptElements.length;
+            if (removedCount === 0) {
+                return {
+                    success: true,
+                    removedCount: 0,
+                    message: includeUserAssets
+                        ? "No matching elements were removed."
+                        : "No matching removable elements found (user assets are protected by default).",
+                };
+            }
+
+            excalidrawApi.updateScene({ elements: keptElements });
+            return {
+                success: true,
+                mode,
+                removedCount,
+                message: `Removed ${removedCount} selected element(s).`,
             };
         }
 

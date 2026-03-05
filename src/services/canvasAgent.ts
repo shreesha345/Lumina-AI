@@ -7,7 +7,11 @@ import skillsDoc from "../skills.md?raw";
 import { executeCanvasTool, type ExcalidrawAPI } from "./aiTools";
 
 const API_KEY = (import.meta as any).env.VITE_GEMINI_API_KEY || "";
-const TOOL_MODEL = "gemini-3-flash-preview";
+const TOOL_MODEL = (import.meta as any).env.VITE_GEMINI_TOOL_MODEL || "gemini-3.1-flash-lite-preview";
+const TOOL_THINKING_BUDGET_RAW = (import.meta as any).env.VITE_GEMINI_TOOL_THINKING_BUDGET;
+const TOOL_THINKING_BUDGET = Number.isFinite(Number(TOOL_THINKING_BUDGET_RAW))
+    ? Number(TOOL_THINKING_BUDGET_RAW)
+    : 0;
 
 // ─── Tool declarations the agent can call ───
 
@@ -64,6 +68,36 @@ const toolAgentTools = [
             type: Type.OBJECT,
             properties: {},
             required: [],
+        },
+    },
+    {
+        name: "clear_canvas_selection",
+        description: "Remove only specific parts of the canvas so diagrams can be updated without clearing everything. Supports mode='ids' (ids_csv), mode='group' (group_id), or mode='bbox' (x,y,width,height). By default, user images and embedded videos/iframes are protected.",
+        parameters: {
+            type: Type.OBJECT,
+            properties: {
+                mode: {
+                    type: Type.STRING,
+                    description: "Selection mode: 'ids', 'group', or 'bbox'.",
+                },
+                ids_csv: {
+                    type: Type.STRING,
+                    description: "Comma-separated element IDs to remove when mode='ids'.",
+                },
+                group_id: {
+                    type: Type.STRING,
+                    description: "Group ID to remove when mode='group'.",
+                },
+                x: { type: Type.STRING, description: "Left coordinate for bbox mode." },
+                y: { type: Type.STRING, description: "Top coordinate for bbox mode." },
+                width: { type: Type.STRING, description: "Width for bbox mode." },
+                height: { type: Type.STRING, description: "Height for bbox mode." },
+                include_user_assets: {
+                    type: Type.STRING,
+                    description: "'yes' to allow deleting images/embeddables/iframes. Default is 'no'.",
+                },
+            },
+            required: ["mode"],
         },
     },
 ];
@@ -125,6 +159,8 @@ Summary:
 
 ## GENERAL RULES
 - **ALWAYS call get_canvas FIRST** to see existing content and avoid overlapping.
+- For update/edit requests, prefer targeted cleanup with clear_canvas_selection instead of clearing everything.
+- Use clear_canvas_selection mode='group' or mode='ids' when replacing one diagram section; use mode='bbox' only when IDs/groups are unavailable.
 - If images or embeddable elements (YouTube videos, iframes) exist, place new content to the RIGHT with 150px+ spacing.
 - **NEVER clear/remove user images OR embedded videos (YouTube, iframes).** These are user-placed content and must always be preserved.
 - Embeddable elements have type "embeddable" or "iframe" — treat them identically to images when deciding placement and preservation.
@@ -159,7 +195,7 @@ export async function executeDrawingAgent(
             config: {
                 systemInstruction: TOOL_AGENT_SYSTEM,
                 tools: [{ functionDeclarations: toolAgentTools }],
-                thinkingConfig: { thinkingBudget: 0 }, // disable thinking for speed
+                thinkingConfig: { thinkingBudget: TOOL_THINKING_BUDGET },
             },
         });
 
@@ -244,7 +280,7 @@ export async function executeDrawingAgent(
                 config: {
                     systemInstruction: TOOL_AGENT_SYSTEM,
                     tools: [{ functionDeclarations: toolAgentTools }],
-                    thinkingConfig: { thinkingBudget: 0 },
+                    thinkingConfig: { thinkingBudget: TOOL_THINKING_BUDGET },
                 },
             });
         }

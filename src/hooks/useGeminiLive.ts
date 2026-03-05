@@ -10,8 +10,8 @@ import { executeDrawingAgent } from "../services/canvasAgent";
 import { geminiLiveSystemInstruction } from "../prompts";
 
 const API_KEY = (import.meta as any).env.VITE_GEMINI_API_KEY || "";
-const MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
-const VISION_MODEL = "gemini-2.5-flash"; // REST fallback model for image analysis if direct live image send is unavailable
+const MODEL = (import.meta as any).env.VITE_GEMINI_LIVE_MODEL || "gemini-2.5-flash-native-audio-preview-12-2025";
+const VISION_MODEL = (import.meta as any).env.VITE_GEMINI_VISION_MODEL || "gemini-2.5-flash"; // REST fallback model for image analysis if direct live image send is unavailable
 const SCREEN_FRAME_INTERVAL_MS = 1200;
 const liveFunctionDeclarations = canvasToolDeclarations.filter((d: any) => d.name !== "view_screen");
 
@@ -35,9 +35,10 @@ function base64ToArrayBuffer(base64: string) {
 
 interface UseGeminiLiveOptions {
     excalidrawApiRef: React.RefObject<ExcalidrawAPI | null>;
+    getPdfSelectionContext?: () => any;
 }
 
-export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
+export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseGeminiLiveOptions) {
     const [isConnected, setIsConnected] = useState(false);
     const [isRecording, setIsRecording] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false); // true between send & first AI response
@@ -369,6 +370,45 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
         }
     }, [excalidrawApiRef, analyzeImageViaRest]);
 
+    // ─── Return the current marked PDF region/page for explanation ───
+    const capturePdfSelection = useCallback(async (): Promise<any> => {
+        const ctx = getPdfSelectionContext ? getPdfSelectionContext() : null;
+        if (!ctx || !ctx.imageBase64) {
+            return {
+                error: "No marked PDF selection is available. Ask the user to open the PDF panel, mark a region (or keep full page), then try again.",
+            };
+        }
+
+        try {
+            const selectionInfo = ctx.hasSelection && ctx.selectionRect
+                ? `Marked region x=${ctx.selectionRect.x}, y=${ctx.selectionRect.y}, w=${ctx.selectionRect.width}, h=${ctx.selectionRect.height}`
+                : "No region marked; using full visible PDF page";
+
+            // Prefer direct live frame delivery first.
+            const sentDirectly = sendImageFrameToLiveSession(ctx.imageBase64, ctx.mimeType || "image/png");
+            if (sentDirectly) {
+                return {
+                    success: true,
+                    message: `PDF snapshot sent directly. File: ${ctx.fileName}, page ${ctx.pageNumber}/${ctx.totalPages}, zoom ${Math.round((ctx.zoom || 1) * 100)}%. ${selectionInfo}. Analyze and explain this content.`
+                };
+            }
+
+            // Fallback: run REST vision analysis and send textual result.
+            const description = await analyzeImageViaRest(
+                ctx.imageBase64,
+                ctx.mimeType || "image/png",
+                "You are reading a marked area from a PDF. Extract and explain what is visible: text, equations, diagrams, axes, labels, tables, and symbols. If the image is partial, infer local context only and mention uncertainty when needed."
+            );
+
+            return {
+                success: true,
+                message: `PDF context (${ctx.fileName}, page ${ctx.pageNumber}/${ctx.totalPages}, zoom ${Math.round((ctx.zoom || 1) * 100)}%): ${selectionInfo}.\n\nExtracted content:\n${description}`,
+            };
+        } catch (err: any) {
+            return { error: "Failed to analyze PDF selection: " + (err?.message || err) };
+        }
+    }, [analyzeImageViaRest, getPdfSelectionContext, sendImageFrameToLiveSession]);
+
     // ─── Process a single tool call message ───
     const processToolCall = useCallback(
         async (toolCallMessage: any) => {
@@ -390,6 +430,8 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
                     // Handle view_canvas locally — it needs access to excalidraw API & session
                     if (fc.name === "view_canvas") {
                         result = await captureCanvasSnapshot();
+                    } else if (fc.name === "view_pdf_selection") {
+                        result = await capturePdfSelection();
                     } else if (fc.name === "view_screen") {
                         result = await captureScreenSnapshot();
                     } else if (fc.name === "inspect_canvas") {
@@ -449,7 +491,7 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
             sendingPausedRef.current = false;
             setIsDrawing(false);
         },
-        [excalidrawApiRef, captureCanvasSnapshot]
+        [captureCanvasSnapshot, capturePdfSelection, captureScreenSnapshot, excalidrawApiRef]
     );
 
     // ─── Handle tool calls with queue to prevent overlapping ───
