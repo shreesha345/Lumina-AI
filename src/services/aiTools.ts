@@ -247,6 +247,18 @@ export const chessGameDeclaration = {
                 type: Type.STRING,
                 description: "Piece to promote pawn to: 'Q', 'R', 'B', or 'N'. Default is 'Q' (queen).",
             },
+            light_color: {
+                type: Type.STRING,
+                description: "Hex color for light squares, e.g. '#f0d9b5'. AI can choose any color to theme the board.",
+            },
+            dark_color: {
+                type: Type.STRING,
+                description: "Hex color for dark squares, e.g. '#b58863'. AI can choose any color to theme the board.",
+            },
+            border_color: {
+                type: Type.STRING,
+                description: "Hex color for the board border/frame, e.g. '#6b4c2a'.",
+            },
         },
         required: ["action"],
     },
@@ -1045,6 +1057,10 @@ export async function executeCanvasTool(
 
             if (action === "start" || action === "reset") {
                 const state = Chess.startGame();
+                // Apply custom colors if provided
+                if (toolArgs?.light_color || toolArgs?.dark_color || toolArgs?.border_color) {
+                    Chess.setBoardColors(toolArgs.light_color, toolArgs.dark_color, toolArgs.border_color);
+                }
                 const err = renderChessBoard(state);
                 if (err) return err;
                 return {
