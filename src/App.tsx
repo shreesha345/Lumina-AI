@@ -705,12 +705,6 @@ function App() {
             >
               Live
             </button>
-            <button
-              className={`mode-toggle-btn ${appMode === 'agentic' ? 'active' : ''}`}
-              onClick={() => setAppMode('agentic')}
-            >
-              Agentic
-            </button>
           </div>
         </div>
         <div className="top-bar-right">
