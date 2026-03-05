@@ -13,6 +13,7 @@ import { useGeminiLive } from './hooks/useGeminiLive';
 
 function App() {
   const LIBRARY_PRELOAD_CACHE_KEY = 'lumina.excalidraw.library-preload.v1';
+  const SHOW_LIBRARY_IMPORT_TOASTS = false;
   // App mode
   const [appMode, setAppMode] = useState('live'); // 'agentic' | 'live'
   const [showPlusMenu, setShowPlusMenu] = useState(false);
@@ -57,7 +58,7 @@ function App() {
   const isPdfFile = useCallback((file: File | null | undefined) => {
     if (!file) return false;
     return file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
-  }, [isExcalidrawReady]);
+  }, []);
 
   const extractDroppedPdf = useCallback((dt: DataTransfer | null) => {
     if (!dt || !dt.files || dt.files.length === 0) return null;
@@ -75,10 +76,12 @@ function App() {
     isResponding,
     isDrawing,
     isScreenSharing,
+    isHandsFreeMode,
     connect,
     disconnect,
     startRecording,
     stopRecording,
+    toggleHandsFreeMode,
     startScreenShare,
     stopScreenShare,
   } = useGeminiLive({ excalidrawApiRef, getPdfSelectionContext });
@@ -321,15 +324,19 @@ function App() {
         setAreLibrariesReady(true);
       }
 
-      api.setToast({
-        message: `Imported ${importedCount}/${totalCount} Excalidraw libraries.`,
-      });
+      if (SHOW_LIBRARY_IMPORT_TOASTS) {
+        api.setToast({
+          message: `Imported ${importedCount}/${totalCount} Excalidraw libraries.`,
+        });
+      }
       return { success, imported: importedCount, total: totalCount };
     } catch (err: any) {
       console.error('Failed to import Excalidraw libraries:', err);
-      api.setToast({
-        message: `Library import failed: ${err?.message || 'Unknown error'}`,
-      });
+      if (SHOW_LIBRARY_IMPORT_TOASTS) {
+        api.setToast({
+          message: `Library import failed: ${err?.message || 'Unknown error'}`,
+        });
+      }
       return { success: false, imported: 0, total: 0 };
     } finally {
       setIsImportingLibraries(false);
@@ -445,18 +452,22 @@ function App() {
         });
       }
 
-      api.setToast({
-        message: importedCount > 0
-          ? `Imported ${importedCount} library link(s) from URL.`
-          : 'No valid addLibrary links were found in URL.',
-      });
+      if (SHOW_LIBRARY_IMPORT_TOASTS) {
+        api.setToast({
+          message: importedCount > 0
+            ? `Imported ${importedCount} library link(s) from URL.`
+            : 'No valid addLibrary links were found in URL.',
+        });
+      }
     };
 
     run().catch((error) => {
       console.error('Failed to import addLibrary URL(s):', error);
-      api.setToast({ message: 'Failed to import addLibrary URL(s).' });
+      if (SHOW_LIBRARY_IMPORT_TOASTS) {
+        api.setToast({ message: 'Failed to import addLibrary URL(s).' });
+      }
     });
-  }, []);
+  }, [SHOW_LIBRARY_IMPORT_TOASTS]);
 
   const handleCanvasDragOverCapture = useCallback((e: React.DragEvent) => {
     const pdfFile = extractDroppedPdf(e.dataTransfer);
@@ -574,6 +585,7 @@ function App() {
   const justReleasedPushRef = useRef(false);
 
   const handleVoiceButtonClick = useCallback(() => {
+    if (isHandsFreeMode) return;
     // If a push-to-talk cycle just ended on mouseup, skip the click event
     if (justReleasedPushRef.current) {
       justReleasedPushRef.current = false;
@@ -587,9 +599,10 @@ function App() {
       voiceStateRef.current.mode = 'click';
       startRecording();
     }
-  }, [isRecording, startRecording, stopRecording]);
+  }, [isHandsFreeMode, isRecording, startRecording, stopRecording]);
 
   const handleVoiceButtonDown = useCallback(() => {
+    if (isHandsFreeMode) return;
     // Don't activate push-to-talk if already recording via click-toggle
     if (voiceStateRef.current.mode === 'click') return;
     // Start a timer — if held long enough, enter push-to-talk mode
@@ -600,9 +613,10 @@ function App() {
         startRecording();
       }
     }, 300);
-  }, [startRecording]);
+  }, [isHandsFreeMode, startRecording]);
 
   const handleVoiceButtonUp = useCallback(() => {
+    if (isHandsFreeMode) return;
     isHoldingRef.current = false;
     if (holdTimerRef.current) {
       clearTimeout(holdTimerRef.current);
@@ -614,12 +628,26 @@ function App() {
       justReleasedPushRef.current = true;
       stopRecording();
     }
-  }, [stopRecording]);
+  }, [isHandsFreeMode, stopRecording]);
+
+  const handleHandsFreeOptionClick = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleHandsFreeMode();
+  }, [toggleHandsFreeMode]);
 
 
 
   useEffect(() => {
     const handleKeyDown = (e) => {
+      if (e.ctrlKey && String(e.key || '').toLowerCase() === 'h') {
+        e.preventDefault();
+        toggleHandsFreeMode();
+        return;
+      }
+
+      if (isHandsFreeMode) return;
+
       if (e.ctrlKey && e.code === 'Space') {
         e.preventDefault();
         // If it's running via click mode, ignore the push-to-talk key
@@ -631,6 +659,7 @@ function App() {
     };
 
     const handleKeyUp = (e) => {
+      if (isHandsFreeMode) return;
       if (e.code === 'Space') {
         e.preventDefault();
         // Only stop if it was started via push mode
@@ -647,7 +676,7 @@ function App() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [startRecording, stopRecording]);
+  }, [isHandsFreeMode, startRecording, stopRecording, toggleHandsFreeMode]);
 
   return (
     <div className="app-layout">
@@ -719,7 +748,20 @@ function App() {
                 onMouseLeave={handleVoiceButtonUp}
               >
                 <div className="voice-tooltip">
-                  {isConnected ? 'Hold to talk, release to send (or Ctrl+Space)' : 'Connecting to Gemini Live...'}
+                  {isHandsFreeMode
+                    ? 'Hands-free enabled: just talk naturally (Ctrl+H to disable)'
+                    : isConnected
+                      ? 'Hold to talk, release to send (Ctrl+Space). Toggle hands-free: Ctrl+H'
+                      : 'Connecting to Gemini Live...'}
+                </div>
+                <div className="voice-hover-menu">
+                  <button
+                    className={`voice-hover-option ${isHandsFreeMode ? 'active' : ''}`}
+                    onClick={handleHandsFreeOptionClick}
+                    type="button"
+                  >
+                    {isHandsFreeMode ? 'Disable Hands-free' : 'Enable Hands-free'}
+                  </button>
                 </div>
                 {isResponding ? (
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -746,7 +788,13 @@ function App() {
                   </svg>
                 )}
                 <span>
-                  {isResponding ? 'AI Speaking...' : isAudioProcessing ? 'Processing...' : isRecording ? 'Recording...' : (isConnected ? 'Hold to Talk' : 'Connecting...')}
+                  {isResponding
+                    ? 'AI Speaking...'
+                    : isAudioProcessing
+                      ? 'Processing...'
+                      : isRecording
+                        ? (isHandsFreeMode ? 'Listening...' : 'Recording...')
+                        : (isConnected ? (isHandsFreeMode ? 'Hands-free Ready' : 'Hold to Talk') : 'Connecting...')}
                 </span>
                 {isRecording && <div className="voice-pulse"></div>}
                 {isAudioProcessing && <div className="voice-pulse processing-pulse"></div>}
