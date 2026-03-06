@@ -223,13 +223,17 @@ export const accessExcalidrawLibraryDeclaration = {
 
 export const chessGameDeclaration = {
     name: "chess_game",
-    description: "Interactive chess game on the canvas. Creates a beautiful chess board with all pieces and lets you move them. The AI can also play against the user. Actions: 'start' (create board), 'move' (move a piece), 'ai_move' (AI makes a move), 'valid_moves' (show legal moves for a square), 'state' (get current game state), 'reset' (new game).",
+    description: "Interactive chess game where you (the AI) play against the user. WORKFLOW: (1) When user asks to play chess, use action='start' and ask which color they want (white/black). (2) After they choose, start the game with their color choice. (3) When it's YOUR turn (you'll see isAiTurn=true in the response), you MUST make a move by calling action='move'. (4) When it's the user's turn (isPlayerTurn=true), wait for them to tell you their move, then execute it. (5) Use action='valid_moves' to see legal moves before making your move. You are playing a real chess game - think strategically!",
     parameters: {
         type: Type.OBJECT,
         properties: {
             action: {
                 type: Type.STRING,
-                description: "Action to perform: 'start', 'move', 'ai_move', 'valid_moves', 'state', or 'reset'.",
+                description: "Action: 'start' (begin game, requires player_color), 'move' (make a move), 'valid_moves' (see legal moves), 'state' (get game info), 'reset' (new game).",
+            },
+            player_color: {
+                type: Type.STRING,
+                description: "For 'start' action: 'white' or 'black' - which color the human user wants to play. You (AI) will play the opposite color.",
             },
             from: {
                 type: Type.STRING,
@@ -1012,61 +1016,61 @@ export async function executeCanvasTool(
 
             // Helper: render chess board SVG onto the canvas, replacing the old one
             const renderChessBoard = (state: Chess.GameState, highlights?: string[]) => {
-                const svgString = Chess.renderSvg(state, highlights);
-                const encoded = unescape(encodeURIComponent(svgString));
-                const base64 = btoa(encoded);
-                const dataURL = `data:image/svg+xml;base64,${base64}`;
-                const fileId = `chess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-                (excalidrawApi as any).addFiles([{
-                    id: fileId as any, mimeType: "image/svg+xml" as any,
-                    dataURL: dataURL as any, created: Date.now(),
-                }]);
-
-                const imageElement: any = {
-                    type: "image", x: 100, y: 50, width: 560, height: 600,
-                    fileId, status: "saved", id: fileId + "_el",
-                };
-
-                // Remove old chess board if exists
+                // Don't render SVG board anymore - we use the interactive HTML board instead
+                // Just dispatch event to update the interactive board
+                window.dispatchEvent(new CustomEvent('chess-board-updated'));
+                
+                // Remove old SVG chess board from canvas if it exists
                 const oldId = Chess.getBoardElementId();
-                let existingElements = [...excalidrawApi.getSceneElements()];
                 if (oldId) {
-                    existingElements = existingElements.filter((e: any) => e.id !== oldId && e.fileId !== oldId.replace('_el', ''));
+                    let existingElements = [...excalidrawApi.getSceneElements()];
+                    existingElements = existingElements.filter((e: any) => 
+                        e.id !== oldId && e.fileId !== oldId.replace('_el', '')
+                    );
+                    excalidrawApi.updateScene({ elements: existingElements });
+                    Chess.clearBoardElementId();
                 }
-
-                let converted: any[];
-                try {
-                    converted = convertToExcalidrawElements([imageElement] as any, { regenerateIds: false });
-                } catch (err) {
-                    return { error: "Failed to render chess board: " + String(err) };
-                }
-
-                excalidrawApi.updateScene({ elements: [...existingElements, ...converted] });
-                Chess.setBoardElementId(fileId + "_el");
-
-                try {
-                    excalidrawApi.scrollToContent(undefined, {
-                        fitToViewport: true, viewportZoomFactor: 0.85,
-                        animate: true, duration: 300,
-                    });
-                } catch (_e) { }
 
                 return null; // success
             };
 
             if (action === "start" || action === "reset") {
-                const state = Chess.startGame();
+                const playerColorChoice = String(toolArgs?.player_color || "").toLowerCase().trim();
+                
+                // Validate player color choice
+                if (playerColorChoice !== 'white' && playerColorChoice !== 'black') {
+                    return { 
+                        error: "player_color is required for 'start' action. Ask the user: 'Would you like to play as White or Black?' Then call again with player_color='white' or player_color='black'." 
+                    };
+                }
+                
+                const state = Chess.startGame(playerColorChoice as Chess.Color);
+                
                 // Apply custom colors if provided
                 if (toolArgs?.light_color || toolArgs?.dark_color || toolArgs?.border_color) {
                     Chess.setBoardColors(toolArgs.light_color, toolArgs.dark_color, toolArgs.border_color);
                 }
+                
                 const err = renderChessBoard(state);
                 if (err) return err;
+                
+                const aiColor = Chess.getAiColor();
+                const isAiTurn = Chess.isAiTurn();
+                
+                // Dispatch event to show interactive chess board
+                window.dispatchEvent(new CustomEvent('chess-game-started'));
+                
+                // Expose Chess module globally for ChessBoard component
+                (window as any).Chess = Chess;
+                
                 return {
                     success: true,
-                    message: "Chess board created! All pieces are placed. White plays first. Use action='move' with 'from' and 'to' squares (e.g., from='e2', to='e4') to move pieces. Use action='ai_move' for the AI to make a move.",
+                    message: `Chess game started! User is playing ${playerColorChoice}, you (AI) are playing ${aiColor}. ${state.turn} moves first. ${isAiTurn ? "It's YOUR turn - make a move!" : "It's the user's turn - wait for their move."}`,
                     turn: state.turn,
+                    playerColor: playerColorChoice,
+                    aiColor: aiColor,
+                    isAiTurn: isAiTurn,
+                    isPlayerTurn: Chess.isPlayerTurn(),
                 };
             }
 
@@ -1075,36 +1079,51 @@ export async function executeCanvasTool(
                 const to = String(toolArgs?.to || "").toLowerCase().trim();
                 if (!from || !to) return { error: "'move' action requires 'from' and 'to' squares (e.g., from='e2', to='e4')." };
 
+                // Execute move with full validation
                 const result = Chess.makeMove(from, to, toolArgs?.promotion);
+                
+                // Log validation result for debugging
+                const movingColor = Chess.getState()?.turn === 'white' ? 'black' : 'white'; // Color that just moved
+                const wasAiMove = movingColor === Chess.getAiColor();
+                console.log(`[Chess] Move attempt: ${from} → ${to} (${wasAiMove ? 'AI' : 'Player'}), Result:`, result.ok ? 'VALID' : 'REJECTED', result.error || result.notation);
+                
                 if (!result.ok) return { error: result.error };
 
                 const err = renderChessBoard(result.state);
                 if (err) return err;
+                
+                const isAiTurn = Chess.isAiTurn();
+                const isPlayerTurn = Chess.isPlayerTurn();
+                
+                let statusMsg = '';
+                if (result.state.status === 'checkmate') {
+                    statusMsg = `Checkmate! ${result.state.winner} wins! ${result.state.winner === Chess.getAiColor() ? 'You (AI) won!' : 'User won!'}`;
+                } else if (result.state.status === 'stalemate') {
+                    statusMsg = 'Stalemate — draw!';
+                } else if (result.state.status === 'check') {
+                    statusMsg = `Check! ${isAiTurn ? "It's YOUR turn - you must respond to the check!" : "It's the user's turn."}`;
+                } else {
+                    statusMsg = `${result.state.turn} to move. ${isAiTurn ? "It's YOUR turn - make your move!" : "It's the user's turn - wait for their move."}`;
+                }
+                
                 return {
                     success: true,
                     notation: result.notation,
-                    message: `Moved ${from} to ${to} (${result.notation}). ${result.state.status === 'check' ? 'Check!' : result.state.status === 'checkmate' ? 'Checkmate! ' + result.state.winner + ' wins!' : result.state.status === 'stalemate' ? 'Stalemate — draw!' : result.state.turn + ' to move.'}`,
+                    message: `Moved ${from} to ${to} (${result.notation}). ${statusMsg}`,
                     turn: result.state.turn,
                     status: result.state.status,
                     winner: result.state.winner,
+                    isAiTurn: isAiTurn,
+                    isPlayerTurn: isPlayerTurn,
+                    playerColor: Chess.getPlayerColor(),
+                    aiColor: Chess.getAiColor(),
+                    validationPassed: true,
                 };
             }
 
             if (action === "ai_move") {
-                const result = Chess.makeAiMove();
-                if (!result.ok) return { error: result.error };
-
-                const err = renderChessBoard(result.state);
-                if (err) return err;
-                return {
-                    success: true,
-                    from: result.from,
-                    to: result.to,
-                    notation: result.notation,
-                    message: `AI moved ${result.from} to ${result.to} (${result.notation}). ${result.state.status === 'check' ? 'Check!' : result.state.status === 'checkmate' ? 'Checkmate! ' + result.state.winner + ' wins!' : result.state.status === 'stalemate' ? 'Stalemate — draw!' : result.state.turn + ' to move.'}`,
-                    turn: result.state.turn,
-                    status: result.state.status,
-                    winner: result.state.winner,
+                return { 
+                    error: "AI move is disabled. You must make all moves using action='move' with from/to parameters. Use action='valid_moves' to see legal moves for any piece." 
                 };
             }
 
@@ -1129,6 +1148,10 @@ export async function executeCanvasTool(
             if (action === "state") {
                 const state = Chess.getState();
                 if (!state) return { error: "No game in progress. Use action='start' first." };
+                
+                const isAiTurn = Chess.isAiTurn();
+                const isPlayerTurn = Chess.isPlayerTurn();
+                
                 return {
                     success: true,
                     turn: state.turn,
@@ -1138,10 +1161,15 @@ export async function executeCanvasTool(
                     lastMove: state.lastMove,
                     capturedByWhite: state.capturedByWhite,
                     capturedByBlack: state.capturedByBlack,
+                    playerColor: Chess.getPlayerColor(),
+                    aiColor: Chess.getAiColor(),
+                    isAiTurn: isAiTurn,
+                    isPlayerTurn: isPlayerTurn,
+                    message: isAiTurn ? "It's YOUR turn (AI) - make a move!" : "It's the user's turn - wait for their move.",
                 };
             }
 
-            return { error: `Unknown chess action: '${action}'. Use 'start', 'move', 'ai_move', 'valid_moves', 'state', or 'reset'.` };
+            return { error: `Unknown chess action: '${action}'. Valid actions: 'start' (with player_color), 'move', 'valid_moves', 'state', 'reset'.` };
         }
 
         case "add_svg": {

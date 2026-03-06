@@ -1,5 +1,23 @@
 // ─── Chess Engine ───
 // Full chess game: state management, move validation, AI moves, SVG board rendering.
+//
+// ========== GOVERNANCE MODEL ==========
+// This chess engine enforces STRICT RULES to ensure fair play:
+//
+// 1. TURN ENFORCEMENT: Only the current player (white/black) can move their pieces
+// 2. LEGAL MOVES ONLY: All moves are validated against official chess rules:
+//    - Piece movement patterns (pawn, knight, bishop, rook, queen, king)
+//    - Captures, en passant, castling, pawn promotion
+//    - Cannot move into check or leave king in check
+//    - Cannot castle through check or while in check
+//    - Cannot move through other pieces (except knight)
+// 3. GAME STATE VALIDATION: Cannot move after checkmate or stalemate
+// 4. SQUARE NOTATION: Must use algebraic notation (a1-h8)
+// 5. NO AI ENGINE: All moves must be explicitly made via makeMove() with from/to coordinates
+//
+// The Live agent must call makeMove() for EVERY move and handle any validation errors.
+// Use getValidMoves(square) to see legal moves before attempting a move.
+// ========================================
 
 // ========== Types ==========
 
@@ -20,6 +38,8 @@ export interface GameState {
     status: 'playing' | 'check' | 'checkmate' | 'stalemate';
     winner: Color | null;
     moveNumber: number;
+    playerColor: Color | null; // Which color the human player is playing
+    aiColor: Color | null; // Which color the AI is playing
 }
 
 // ========== Constants ==========
@@ -36,6 +56,8 @@ const FILES = 'abcdefgh';
 let gameState: GameState | null = null;
 let boardElementId: string | null = null;
 let boardColors = { light: '#f0d9b5', dark: '#b58863', border: '#6b4c2a' };
+let playerColor: Color | null = null; // Which color the human user is playing
+let aiColor: Color | null = null; // Which color the AI (Gemini Live agent) is playing
 
 // ========== Coordinate Helpers ==========
 
@@ -65,13 +87,15 @@ function createBoard(): Board {
     return b;
 }
 
-function newGameState(): GameState {
+function newGameState(playerColor: Color | null = null): GameState {
+    const aiColor = playerColor === 'white' ? 'black' : playerColor === 'black' ? 'white' : null;
     return {
         board: createBoard(), turn: 'white',
         castling: { wK: true, wQ: true, bK: true, bQ: true },
         enPassant: null, lastMove: null, history: [],
         capturedByWhite: [], capturedByBlack: [],
         status: 'playing', winner: null, moveNumber: 1,
+        playerColor, aiColor,
     };
 }
 
@@ -336,8 +360,8 @@ export function renderSvg(st: GameState, highlights?: string[]): string {
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
         const pc = st.board[r][c]; if (!pc) continue;
         const sym = PIECE_UNICODE[(pc.color === 'white' ? 'w' : 'b') + pc.type];
-        const fill = pc.color === 'white' ? '#fff' : '#1a1a1a';
-        const stroke = pc.color === 'white' ? '#333' : '#666';
+        const fill = pc.color === 'white' ? '#1a1a1a' : '#fff';
+        const stroke = pc.color === 'white' ? '#666' : '#333';
         s += `<text x="${O + c * SQ + SQ / 2}" y="${O + r * SQ + SQ / 2 + 2}" font-size="44" text-anchor="middle" dominant-baseline="central" fill="${fill}" stroke="${stroke}" stroke-width="0.5">${sym}</text>`;
     }
     // File labels
@@ -363,30 +387,51 @@ export function renderSvg(st: GameState, highlights?: string[]): string {
 
 // ========== Public API ==========
 
-export function startGame(): GameState {
+export function startGame(userColor?: Color): GameState {
     gameState = newGameState();
     boardElementId = null;
+    
+    // Set player colors if specified
+    if (userColor === 'white' || userColor === 'black') {
+        playerColor = userColor;
+        aiColor = userColor === 'white' ? 'black' : 'white';
+    } else {
+        // Default: user is white, AI is black
+        playerColor = 'white';
+        aiColor = 'black';
+    }
+    
     return gameState;
 }
 
 export function makeMove(from: string, to: string, promotion?: string): { ok: boolean; state: GameState; notation: string; error?: string } {
+    // ========== STRICT MOVE VALIDATION - GOVERNANCE RULES ==========
+    // 1. Game must be in progress
     if (!gameState) return { ok: false, state: newGameState(), notation: '', error: 'No game in progress. Start a game first.' };
+    
+    // 2. Game must not be over
     if (gameState.status === 'checkmate' || gameState.status === 'stalemate')
-        return { ok: false, state: gameState, notation: '', error: `Game is over: ${gameState.status}.` };
+        return { ok: false, state: gameState, notation: '', error: `Game is over: ${gameState.status}. Cannot make more moves.` };
 
+    // 3. Validate square notation (must be a1-h8 format)
     const f = parseSq(from), t = parseSq(to);
-    if (!f || !t) return { ok: false, state: gameState, notation: '', error: `Invalid square: ${!f ? from : to}` };
+    if (!f || !t) return { ok: false, state: gameState, notation: '', error: `Invalid square notation: ${!f ? from : to}. Use format like 'e2', 'e4' (a-h, 1-8).` };
 
+    // 4. Source square must have a piece
     const piece = gameState.board[f.r][f.c];
-    if (!piece) return { ok: false, state: gameState, notation: '', error: `No piece on ${from}.` };
+    if (!piece) return { ok: false, state: gameState, notation: '', error: `No piece on ${from}. Cannot move from empty square.` };
+    
+    // 5. Must move the correct color (turn enforcement)
     if (piece.color !== gameState.turn)
-        return { ok: false, state: gameState, notation: '', error: `It's ${gameState.turn}'s turn, but ${from} has a ${piece.color} piece.` };
+        return { ok: false, state: gameState, notation: '', error: `It's ${gameState.turn}'s turn, but ${from} has a ${piece.color} piece. You cannot move opponent's pieces.` };
 
-    // Check if move is legal
+    // 6. Move must be legal according to chess rules (includes check validation)
+    // This validates: piece movement rules, no moving into check, no castling through check, etc.
     const legal = allLegalMoves(gameState);
     if (!legal.some(m => m.from === from && m.to === to))
-        return { ok: false, state: gameState, notation: '', error: `Illegal move: ${from} to ${to}. Piece cannot move there.` };
+        return { ok: false, state: gameState, notation: '', error: `Illegal move: ${from} to ${to}. This move violates chess rules (piece cannot move there, would leave king in check, or path is blocked). Use action='valid_moves' with square='${from}' to see legal moves.` };
 
+    // 7. Execute the validated move
     const promo: PieceType = (promotion && 'QRBN'.includes(promotion.toUpperCase())) ? promotion.toUpperCase() as PieceType : 'Q';
     gameState = execMove(gameState, from, to, promo);
     const lastEntry = gameState.history[gameState.history.length - 1];
@@ -394,16 +439,15 @@ export function makeMove(from: string, to: string, promotion?: string): { ok: bo
 }
 
 export function makeAiMove(): { ok: boolean; state: GameState; notation: string; from: string; to: string; error?: string } {
-    if (!gameState) return { ok: false, state: newGameState(), notation: '', from: '', to: '', error: 'No game in progress.' };
-    if (gameState.status === 'checkmate' || gameState.status === 'stalemate')
-        return { ok: false, state: gameState, notation: '', from: '', to: '', error: `Game is over: ${gameState.status}.` };
-
-    const mv = pickAiMove(gameState);
-    if (!mv) return { ok: false, state: gameState, notation: '', from: '', to: '', error: 'No legal moves available.' };
-
-    gameState = execMove(gameState, mv.from, mv.to);
-    const lastEntry = gameState.history[gameState.history.length - 1];
-    return { ok: true, state: gameState, notation: lastEntry.notation, from: mv.from, to: mv.to };
+    // AI move functionality removed - all moves must be made by the Live agent
+    return { 
+        ok: false, 
+        state: gameState || newGameState(), 
+        notation: '', 
+        from: '', 
+        to: '', 
+        error: 'AI move is disabled. The Live agent must make all moves using action="move" with from/to parameters.' 
+    };
 }
 
 export function getValidMoves(square: string): string[] {
@@ -422,7 +466,7 @@ export function getValidMoves(square: string): string[] {
 }
 
 export function getState(): GameState | null { return gameState; }
-export function resetGame(): GameState { return startGame(); }
+export function resetGame(userColor?: Color): GameState { return startGame(userColor); }
 export function getBoardElementId(): string | null { return boardElementId; }
 export function setBoardElementId(id: string) { boardElementId = id; }
 export function clearBoardElementId() { boardElementId = null; }
@@ -432,3 +476,11 @@ export function setBoardColors(light?: string, dark?: string, border?: string) {
     if (border) boardColors.border = border;
 }
 export function getBoardColors() { return { ...boardColors }; }
+export function getPlayerColor(): Color | null { return playerColor; }
+export function getAiColor(): Color | null { return aiColor; }
+export function isAiTurn(): boolean { 
+    return gameState !== null && aiColor !== null && gameState.turn === aiColor; 
+}
+export function isPlayerTurn(): boolean { 
+    return gameState !== null && playerColor !== null && gameState.turn === playerColor; 
+}
