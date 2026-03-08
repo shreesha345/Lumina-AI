@@ -10,9 +10,11 @@ import PdfCanvasOverlay from './components/PdfCanvasOverlay';
 import ChessBoard from './components/ChessBoard';
 import { parsePdf } from './services/pdfParser';
 import { useGeminiLive } from './hooks/useGeminiLive';
+import LandingPage from './LandingPage';
 
 
 function App() {
+  const [hasStarted, setHasStarted] = useState(false);
   const LIBRARY_PRELOAD_CACHE_KEY = 'lumina.excalidraw.library-preload.v1';
   const SHOW_LIBRARY_IMPORT_TOASTS = false;
   // App mode
@@ -693,6 +695,10 @@ function App() {
       window.removeEventListener('keyup', handleKeyUp);
     };
   }, [isHandsFreeMode, isRecording, startRecording, stopRecording, toggleHandsFreeMode]);
+
+  if (!hasStarted) {
+    return <LandingPage onStart={() => setHasStarted(true)} />;
+  }
 
   return (
     <div className="app-layout">
