@@ -622,7 +622,7 @@ function App() {
   const handleVoiceButtonClick = useCallback(() => {
     // In hands-free mode, clicking does nothing (always listening)
     if (isHandsFreeMode) return;
-    
+
     // Click-to-talk: Toggle recording on/off
     if (isRecording) {
       // Stop recording and send to AI
