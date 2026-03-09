@@ -4,13 +4,13 @@ import { animateSvg } from 'excalidraw-animate';
 import '@excalidraw/excalidraw/index.css';
 import './App.css';
 
-import FileUpload from './components/FileUpload';
 import ChatHistory from './components/ChatHistory';
 import PdfCanvasOverlay from './components/PdfCanvasOverlay';
 import ChessBoard from './components/ChessBoard';
 import { parsePdf } from './services/pdfParser';
 import { useGeminiLive } from './hooks/useGeminiLive';
 import LandingPage from './LandingPage';
+import { readMemory, updateMemory, UserProfile } from './services/userMemory';
 
 
 function App() {
@@ -24,8 +24,54 @@ function App() {
   const [videoMode, setVideoMode] = useState(false);
 
   // Sidebar state
-  const [sidebarTab, setSidebarTab] = useState('upload'); // 'upload' | 'chat'
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [userMemory, setUserMemory] = useState<UserProfile | null>(null);
+
+  // Profile Edit State
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [draftMemory, setDraftMemory] = useState<Partial<UserProfile>>({});
+
+  const handleSaveMemory = async () => {
+    // Process string lists correctly (comma separated lists back to arrays, or handle normally)
+    const formattedDraft: any = { ...draftMemory };
+    if (typeof formattedDraft.hobbies === 'string') {
+      formattedDraft.hobbies = formattedDraft.hobbies.split(',').map((h: string) => h.trim()).filter((h: string) => h);
+    }
+    if (typeof formattedDraft.interests === 'string') {
+      formattedDraft.interests = formattedDraft.interests.split(',').map((i: string) => i.trim()).filter((i: string) => i);
+    }
+
+    if (Object.keys(formattedDraft).length > 0) {
+      await updateMemory(formattedDraft);
+      const newMemory = await readMemory();
+      if (newMemory) setUserMemory(newMemory);
+    }
+    setIsEditingProfile(false);
+  };
+
+  const handleEditMemory = () => {
+    // prepare draft
+    setDraftMemory({
+      skill_level: userMemory?.skill_level || '',
+      learning_style: userMemory?.learning_style || '',
+      preferred_visual_type: userMemory?.preferred_visual_type || '',
+      hobbies: (userMemory?.hobbies || []).join(', ') as any,
+      interests: (userMemory?.interests || []).join(', ') as any,
+      preferred_examples: userMemory?.preferred_examples || '',
+    });
+    setIsEditingProfile(true);
+  };
+
+  // Poll memory frequently so changes from the backend reflect live
+  useEffect(() => {
+    const fetchMemory = async () => {
+      const memory = await readMemory();
+      if (memory) setUserMemory(memory);
+    };
+    fetchMemory();
+    const interval = setInterval(fetchMemory, 3000);
+    return () => clearInterval(interval);
+  }, []);
 
   // PDF state
   const [paperData, setPaperData] = useState(null);
@@ -237,7 +283,6 @@ function App() {
   // Handle PDF upload
   const handleFileUploaded = useCallback(async (file) => {
     setIsProcessing(true);
-    setSidebarTab('chat');
     setPdfCanvasFile(file);
     setViewerTitle(file.name || 'PDF');
 
@@ -252,9 +297,6 @@ function App() {
         text: `📄 **${parsed.title}** uploaded successfully!\n\n${parsed.pages} pages parsed. I'm ready to explain this paper. What would you like to know?`,
         timestamp: Date.now(),
       }]);
-
-      // Auto-switch to chat tab
-      setSidebarTab('chat');
     } catch (err) {
       console.error('PDF parsing error:', err);
       setMessages(prev => [...prev, {
@@ -851,125 +893,148 @@ function App() {
           <>
             {/* Sidebar */}
             <aside className={`sidebar ${isSidebarOpen ? 'open' : 'closed'}`}>
-              {/* Sidebar Tabs */}
-              <div className="sidebar-tabs">
-                <button
-                  className={`sidebar-tab ${sidebarTab === 'upload' ? 'active' : ''}`}
-                  onClick={() => setSidebarTab('upload')}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
-                    <polyline points="14 2 14 8 20 8" />
+              {/* Memory / User Profile Sidebar */}
+              <div className="sidebar-tabs" style={{ padding: '0 16px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ padding: '16px 0', fontSize: '15px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                    <circle cx="12" cy="7" r="4" />
                   </svg>
-                  Upload
-                </button>
-                <button
-                  className={`sidebar-tab ${sidebarTab === 'chat' ? 'active' : ''}`}
-                  onClick={() => setSidebarTab('chat')}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" />
-                  </svg>
-                  Chat
-                  {messages.length > 0 && (
-                    <span className="tab-badge">{messages.length}</span>
-                  )}
-                </button>
+                  User Profile
+                </div>
+                {!isEditingProfile ? (
+                  <button
+                    onClick={handleEditMemory}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary-color)', fontSize: '13px', fontWeight: 600, padding: '4px 8px', borderRadius: '4px' }}
+                  >
+                    Edit
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleSaveMemory}
+                    style={{ background: 'var(--primary-color)', border: 'none', cursor: 'pointer', color: 'white', fontSize: '13px', fontWeight: 600, padding: '4px 12px', borderRadius: '12px' }}
+                  >
+                    Save
+                  </button>
+                )}
               </div>
 
-              {/* Sidebar Content */}
-              <div className="sidebar-content">
-                {sidebarTab === 'upload' ? (
-                  <div className="upload-tab">
-                    <FileUpload
-                      onFileUploaded={handleFileUploaded}
-                      isProcessing={isProcessing}
-                    />
-
-                    <button
-                      className="explain-btn open-pdf-canvas-btn"
-                      onClick={handleImportExcalidrawLibraries}
-                      disabled={isImportingLibraries || isPreloadingLibraries}
-                    >
-                      {isPreloadingLibraries
-                        ? 'Preloading Libraries...'
-                        : isImportingLibraries
-                          ? 'Importing Libraries...'
-                          : areLibrariesReady
-                            ? 'Libraries Ready (Re-sync)'
-                            : 'Import Excalidraw Libraries'}
-                    </button>
-
-                    {paperData && (
-                      <div className="paper-summary">
-                        <h4>Paper Loaded</h4>
-                        <p className="paper-title">{paperData.title}</p>
-                        <div className="paper-meta">
-                          <span>{paperData.pages} pages</span>
-                          <span>{(paperData.fileSize / 1024 / 1024).toFixed(1)} MB</span>
-                        </div>
-                        <button
-                          className="explain-btn"
-                          onClick={() => {
-                            setSidebarTab('chat');
-                            setMessages(prev => [...prev, {
-                              id: Date.now(),
-                              role: 'user',
-                              text: 'Explain this paper step by step with animations',
-                              timestamp: Date.now(),
-                            }]);
-                            setIsTyping(true);
-                            setTimeout(() => {
-                              setMessages(prev => [...prev, {
-                                id: Date.now(),
-                                role: 'assistant',
-                                text: 'Connect the Gemini 3 API key to enable automatic paper explanation with animated visualizations. The AI will break down each section, generate diagrams, and narrate the explanation.',
-                                timestamp: Date.now(),
-                              }]);
-                              setIsTyping(false);
-                            }, 2000);
-                          }}
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <polygon points="6 3 20 12 6 21 6 3" />
-                          </svg>
-                          Explain Paper
-                        </button>
-                        <button
-                          className="explain-btn open-pdf-canvas-btn"
-                          onClick={() => {
-                            const sourceFile = (paperData as any)?.rawFile || null;
-                            if (sourceFile) {
-                              setPdfCanvasFile(sourceFile);
-                              setViewerTitle(sourceFile.name || 'PDF');
-                            }
-                          }}
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <rect width="18" height="18" x="3" y="3" rx="2" />
-                            <path d="M8 7h8" />
-                            <path d="M8 12h8" />
-                            <path d="M8 17h5" />
-                          </svg>
-                          Open PDF On Canvas
-                        </button>
-                      </div>
-                    )}
+              <div className="sidebar-content" style={{ padding: '20px', overflowY: 'auto' }}>
+                {isEditingProfile ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div>
+                      <label style={{ fontSize: '12px', textTransform: 'uppercase', opacity: 0.6, fontWeight: 700, marginBottom: '6px', display: 'block' }}>Skill Level</label>
+                      <input
+                        value={draftMemory.skill_level || ''}
+                        onChange={(e) => setDraftMemory({ ...draftMemory, skill_level: e.target.value })}
+                        placeholder="e.g. Beginner, Intermediate..."
+                        style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid var(--border-light)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '12px', textTransform: 'uppercase', opacity: 0.6, fontWeight: 700, marginBottom: '6px', display: 'block' }}>Learning Style</label>
+                      <input
+                        value={draftMemory.learning_style || ''}
+                        onChange={(e) => setDraftMemory({ ...draftMemory, learning_style: e.target.value })}
+                        placeholder="e.g. Visual, Hands-on..."
+                        style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid var(--border-light)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '12px', textTransform: 'uppercase', opacity: 0.6, fontWeight: 700, marginBottom: '6px', display: 'block' }}>Visual Preference</label>
+                      <input
+                        value={draftMemory.preferred_visual_type || ''}
+                        onChange={(e) => setDraftMemory({ ...draftMemory, preferred_visual_type: e.target.value })}
+                        placeholder="e.g. Diagrams, Flowcharts..."
+                        style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid var(--border-light)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '12px', textTransform: 'uppercase', opacity: 0.6, fontWeight: 700, marginBottom: '6px', display: 'block' }}>Hobbies (comma separated)</label>
+                      <input
+                        value={draftMemory.hobbies as any || ''}
+                        onChange={(e) => setDraftMemory({ ...draftMemory, hobbies: e.target.value as any })}
+                        placeholder="e.g. Chess, Reading, Coding"
+                        style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid var(--border-light)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '12px', textTransform: 'uppercase', opacity: 0.6, fontWeight: 700, marginBottom: '6px', display: 'block' }}>Interests (comma separated)</label>
+                      <input
+                        value={draftMemory.interests as any || ''}
+                        onChange={(e) => setDraftMemory({ ...draftMemory, interests: e.target.value as any })}
+                        placeholder="e.g. Physics, History, Tech"
+                        style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid var(--border-light)', background: 'var(--bg-color)', color: 'var(--text-color)' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '12px', textTransform: 'uppercase', opacity: 0.6, fontWeight: 700, marginBottom: '6px', display: 'block' }}>Preferred Examples</label>
+                      <textarea
+                        value={draftMemory.preferred_examples || ''}
+                        onChange={(e) => setDraftMemory({ ...draftMemory, preferred_examples: e.target.value })}
+                        placeholder="e.g. Real world analogies..."
+                        rows={3}
+                        style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid var(--border-light)', background: 'var(--bg-color)', color: 'var(--text-color)', resize: 'vertical' }}
+                      />
+                    </div>
+                  </div>
+                ) : !userMemory || Object.keys(userMemory).length === 0 ? (
+                  <div style={{ textAlign: 'center', opacity: 0.6, marginTop: '20px' }}>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ margin: '0 auto 12px' }}>
+                      <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+                    </svg>
+                    <p style={{ fontSize: '14px' }}>Connecting to AI...</p>
+                    <small>Start talking, and I'll learn about your preferences.</small>
                   </div>
                 ) : (
-                  <div className="chat-tab">
-                    {messages.length === 0 ? (
-                      <div className="live-transcript-empty">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-                          <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                          <line x1="12" x2="12" y1="19" y2="22" />
-                        </svg>
-                        <p>Start talking to see your conversation here</p>
-                        <span>Use the mic button or press Ctrl + Space</span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                    {userMemory.skill_level && (
+                      <div>
+                        <div style={{ fontSize: '12px', textTransform: 'uppercase', opacity: 0.6, fontWeight: 700, marginBottom: '6px', letterSpacing: '0.5px' }}>Skill Level</div>
+                        <div style={{ fontSize: '15px', fontWeight: 500 }}>{userMemory.skill_level}</div>
                       </div>
-                    ) : (
-                      <ChatHistory messages={messages} isTyping={isTyping} />
+                    )}
+                    {userMemory.learning_style && (
+                      <div>
+                        <div style={{ fontSize: '12px', textTransform: 'uppercase', opacity: 0.6, fontWeight: 700, marginBottom: '6px', letterSpacing: '0.5px' }}>Learning Style</div>
+                        <div style={{ fontSize: '15px', lineHeight: '1.4' }}>{userMemory.learning_style}</div>
+                      </div>
+                    )}
+                    {userMemory.preferred_visual_type && (
+                      <div>
+                        <div style={{ fontSize: '12px', textTransform: 'uppercase', opacity: 0.6, fontWeight: 700, marginBottom: '6px', letterSpacing: '0.5px' }}>Visual Preference</div>
+                        <div style={{ fontSize: '15px' }}>{userMemory.preferred_visual_type}</div>
+                      </div>
+                    )}
+                    {userMemory.hobbies && userMemory.hobbies.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: '12px', textTransform: 'uppercase', opacity: 0.6, fontWeight: 700, marginBottom: '8px', letterSpacing: '0.5px' }}>Known Hobbies</div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                          {userMemory.hobbies.map((hobby, i) => (
+                            <span key={i} style={{ padding: '4px 10px', background: 'var(--surface-color)', borderRadius: '12px', fontSize: '13px', border: '1px solid var(--border-light)' }}>
+                              {hobby}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {userMemory.interests && userMemory.interests.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: '12px', textTransform: 'uppercase', opacity: 0.6, fontWeight: 700, marginBottom: '8px', letterSpacing: '0.5px' }}>Topics of Interest</div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                          {userMemory.interests.map((interest, i) => (
+                            <span key={i} style={{ padding: '4px 10px', background: 'var(--primary-color)', color: 'white', borderRadius: '12px', fontSize: '13px' }}>
+                              {interest}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {userMemory.preferred_examples && (
+                      <div>
+                        <div style={{ fontSize: '12px', textTransform: 'uppercase', opacity: 0.6, fontWeight: 700, marginBottom: '6px', letterSpacing: '0.5px' }}>Preferred Examples</div>
+                        <div style={{ fontSize: '14px', lineHeight: '1.5', opacity: 0.9 }}>{userMemory.preferred_examples}</div>
+                      </div>
                     )}
                   </div>
                 )}
