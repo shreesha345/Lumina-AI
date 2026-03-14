@@ -17,7 +17,6 @@ Lumina is an AI-powered interactive tutor that combines **real-time voice conver
 - **Canvas awareness** — The AI can view (screenshot) and inspect (structured data) everything on the canvas, including user-uploaded images. New drawings are automatically placed beside existing content to avoid overlap.
 - **PDF paper upload** — Drag-and-drop research papers; full text is extracted and provided as context for the AI.
 - **Animated drawing playback** — Replay AI-drawn diagrams as step-by-step animations.
-- **Two modes** — *Live mode* (voice + canvas) and *Agentic mode* (text-based chat).
 - **Dark / Light theme** — Follows your system preference with manual toggle.
 
 ---
@@ -100,30 +99,6 @@ Open [http://127.0.0.1:5173](http://127.0.0.1:5173) in your browser.
 npm run build
 npm run preview
 ```
-
-### Remotion (Docker)
-
-Render a sample Remotion video into `Sandbox/out/hello-remotion.mp4` using Docker:
-
-```bash
-docker compose -f Sandbox/docker-compose.remotion.yml up --build
-```
-
-Or with plain Docker:
-
-```bash
-docker build -f Sandbox/Dockerfile.remotion -t ai-tutor-gemini-remotion .
-docker run --rm -v ${PWD}/Sandbox/out:/app/Sandbox/out ai-tutor-gemini-remotion
-```
-
-Local (non-Docker) Remotion commands:
-
-```bash
-npm run remotion:studio
-npm run remotion:render
-```
-
----
 
 ## Project Structure
 
