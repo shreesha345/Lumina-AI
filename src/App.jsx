@@ -303,7 +303,7 @@ function App() {
                 <path d="M6 12v5c3 3 9 3 12 0v-5" />
               </svg>
             </div>
-            <span className="brand-name">CampusMind</span>
+            <span className="brand-name">Lumina</span>
             <span className="brand-badge">AI</span>
           </div>
         </div>
