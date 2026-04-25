@@ -8,7 +8,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs
  * @param {File} file - The PDF file to parse
  * @returns {Promise<{text: string, pages: number, title: string}>}
  */
-export async function parsePdf(file) {
+export async function parsePdf(file: File) {
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
@@ -18,7 +18,7 @@ export async function parsePdf(file) {
     for (let i = 1; i <= totalPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
-        const pageText = textContent.items.map(item => item.str).join(' ');
+        const pageText = textContent.items.map((item: any) => item.str).join(' ');
         fullText += pageText + '\n\n';
     }
 

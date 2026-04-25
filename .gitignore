@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# External MCP server
+excalidraw-mcp-app/
+.env
