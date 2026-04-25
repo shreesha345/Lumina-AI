@@ -232,6 +232,54 @@ body {
   }
 }
 
+/* Processing state — amber/orange pulsing */
+.voice-btn.processing {
+  border-color: #f59e0b;
+  background: linear-gradient(135deg, #fffbeb, #fef3c7);
+  color: #d97706;
+  animation: processingGlow 1.5s ease-in-out infinite;
+}
+
+[data-theme='dark'] .voice-btn.processing {
+  background: linear-gradient(135deg, #451a03, #78350f);
+  border-color: #f59e0b;
+  color: #fbbf24;
+}
+
+@keyframes processingGlow {
+  0%, 100% {
+    box-shadow: 0 4px 16px rgba(245, 158, 11, 0.15);
+  }
+  50% {
+    box-shadow: 0 4px 24px rgba(245, 158, 11, 0.4);
+  }
+}
+
+.processing-spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.processing-pulse {
+  border-color: #f59e0b !important;
+  animation: processingPulseAnim 1s infinite !important;
+}
+
+@keyframes processingPulseAnim {
+  0% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.18);
+  }
+}
+
 .voice-btn.responding {
   border-color: #22c55e;
   background: linear-gradient(135deg, #f0fdf4, #dcfce7);
@@ -255,6 +303,39 @@ body {
   50% {
     box-shadow: 0 4px 24px rgba(34, 197, 94, 0.35);
   }
+}
+
+.screen-share-btn {
+  position: fixed;
+  bottom: 24px;
+  left: calc(50% + 120px);
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: all 0.2s;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+}
+
+.screen-share-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  transform: translateX(-50%) translateY(-2px);
+}
+
+.screen-share-btn.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: white;
+  animation: pulseIndicator 2s infinite;
 }
 
 .voice-btn.responding svg circle {
@@ -1559,4 +1640,79 @@ body {
   font-size: 11px;
   color: var(--text-muted);
   text-align: center;
+}
+
+/* AI Drawing Indicator */
+.ai-drawing-indicator {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  box-shadow: var(--shadow-md);
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 500;
+  animation: slideInCustom 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideInCustom {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.95);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.ai-drawing-pulse {
+  position: absolute;
+  inset: -2px;
+  border-radius: 24px;
+  border: 2px solid #3b82f6;
+  opacity: 0.5;
+  animation: pulseIndicator 1.5s infinite;
+  pointer-events: none;
+}
+
+@keyframes pulseIndicator {
+  0% {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.1);
+  }
+}
+
+.ai-drawing-indicator svg {
+  color: #3b82f6;
+  animation: drawWiggle 1.5s ease-in-out infinite;
+}
+
+@keyframes drawWiggle {
+
+  0%,
+  100% {
+    transform: rotate(0);
+  }
+
+  25% {
+    transform: rotate(-10deg) translateY(-2px);
+  }
+
+  75% {
+    transform: rotate(10deg) translateY(2px);
+  }
 }

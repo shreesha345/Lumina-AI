@@ -35,16 +35,23 @@ function App() {
   const messages = appMode === 'live' ? liveMessages : agenticMessages;
   const setMessages = appMode === 'live' ? setLiveMessages : setAgenticMessages;
 
+  // Excalidraw API Reference
+  const excalidrawApiRef = useRef(null);
+
   // Live API Connection
   const {
     isConnected,
     isRecording,
+    isProcessing: isAudioProcessing,
     isResponding,
+    isDrawing,
+    isScreenSharing,
     connect,
     disconnect,
     startRecording,
     stopRecording,
-  } = useGeminiLive();
+    toggleScreenShare,
+  } = useGeminiLive({ excalidrawApiRef });
 
   // Connect when switching to Live mode
   useEffect(() => {
@@ -57,9 +64,6 @@ function App() {
 
   // Voice state
   const voiceStateRef = useRef({ mode: null as string | null }); // mode: 'click' | 'push'
-
-  // Excalidraw
-  const excalidrawApiRef = useRef(null);
 
 
   // Animation state
@@ -182,7 +186,15 @@ function App() {
   }, [animatedSvg]);
 
   // Voice recognition (Gemini Live API)
+  // Track whether a push-to-talk just completed so click doesn't restart recording
+  const justReleasedPushRef = useRef(false);
+
   const handleVoiceButtonClick = useCallback(() => {
+    // If a push-to-talk cycle just ended on mouseup, skip the click event
+    if (justReleasedPushRef.current) {
+      justReleasedPushRef.current = false;
+      return;
+    }
     if (isRecording) {
       voiceStateRef.current.mode = null;
       stopRecording();
@@ -202,6 +214,7 @@ function App() {
   const handleVoiceButtonUp = useCallback(() => {
     if (voiceStateRef.current.mode === 'push') {
       voiceStateRef.current.mode = null;
+      justReleasedPushRef.current = true;
       stopRecording();
     }
   }, [stopRecording]);
@@ -300,35 +313,70 @@ function App() {
           </button>
 
           {appMode === 'live' && (
-            <div
-              className={`voice-btn ${isRecording ? 'active' : ''} ${isResponding ? 'responding' : ''}`}
-              onClick={handleVoiceButtonClick}
-              onMouseDown={handleVoiceButtonDown}
-              onMouseUp={handleVoiceButtonUp}
-              onMouseLeave={handleVoiceButtonUp}
-            >
-              <div className="voice-tooltip">
-                {isConnected ? 'Click or hold Ctrl + Space to start talking to Lumina' : 'Connecting to Gemini Live...'}
+            <>
+              <div
+                className={`voice-btn ${isRecording ? 'active' : ''} ${isAudioProcessing ? 'processing' : ''} ${isResponding ? 'responding' : ''}`}
+                onClick={handleVoiceButtonClick}
+                onMouseDown={handleVoiceButtonDown}
+                onMouseUp={handleVoiceButtonUp}
+                onMouseLeave={handleVoiceButtonUp}
+              >
+                <div className="voice-tooltip">
+                  {isConnected ? 'Hold to talk, release to send (or Ctrl+Space)' : 'Connecting to Gemini Live...'}
+                </div>
+                {isResponding ? (
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <circle cx="12" cy="12" r="1" />
+                    <circle cx="19" cy="12" r="1" />
+                    <circle cx="5" cy="12" r="1" />
+                  </svg>
+                ) : isAudioProcessing ? (
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="processing-spinner">
+                    <path d="M12 2v4" />
+                    <path d="M12 18v4" />
+                    <path d="M4.93 4.93l2.83 2.83" />
+                    <path d="M16.24 16.24l2.83 2.83" />
+                    <path d="M2 12h4" />
+                    <path d="M18 12h4" />
+                    <path d="M4.93 19.07l2.83-2.83" />
+                    <path d="M16.24 7.76l2.83-2.83" />
+                  </svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                    <line x1="12" x2="12" y1="19" y2="22" />
+                  </svg>
+                )}
+                <span>
+                  {isResponding ? 'AI Speaking...' : isAudioProcessing ? 'Processing...' : isRecording ? 'Recording...' : (isConnected ? 'Hold to Talk' : 'Connecting...')}
+                </span>
+                {isRecording && <div className="voice-pulse"></div>}
+                {isAudioProcessing && <div className="voice-pulse processing-pulse"></div>}
+                {isResponding && <div className="voice-pulse responding-pulse"></div>}
               </div>
-              {isResponding ? (
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <circle cx="12" cy="12" r="1" />
-                  <circle cx="19" cy="12" r="1" />
-                  <circle cx="5" cy="12" r="1" />
-                </svg>
-              ) : (
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                  <line x1="12" x2="12" y1="19" y2="22" />
-                </svg>
-              )}
-              <span>
-                {isResponding ? 'AI Speaking...' : isRecording ? 'Listening...' : (isConnected ? 'Gemini Live' : 'Connecting...')}
-              </span>
-              {isRecording && <div className="voice-pulse"></div>}
-              {isResponding && <div className="voice-pulse responding-pulse"></div>}
-            </div>
+
+              <button
+                className={`screen-share-btn ${isScreenSharing ? 'active' : ''}`}
+                onClick={toggleScreenShare}
+                title={isScreenSharing ? "Stop sharing screen" : "Share screen with Lumina"}
+              >
+                {isScreenSharing ? (
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18.36 5.64a9 9 0 0 0-12.73 0" />
+                    <line x1="1" y1="1" x2="23" y2="23" />
+                    <rect width="18" height="13" x="3" y="3" rx="2" ry="2" />
+                  </svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect width="18" height="13" x="3" y="3" rx="2" ry="2" />
+                    <path d="M8 21h8" />
+                    <path d="M12 16v5" />
+                    <line x1="8" y1="11" x2="16" y2="11" />
+                  </svg>
+                )}
+              </button>
+            </>
           )}
         </div>
       </header>
@@ -506,6 +554,17 @@ function App() {
                 </div>
               )}
 
+              {/* AI Drawing Indicator */}
+              {isDrawing && (
+                <div className="ai-drawing-indicator">
+                  <div className="ai-drawing-pulse" />
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 20h9" />
+                    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                  </svg>
+                  <span>Lumina is drawing...</span>
+                </div>
+              )}
             </main>
           </>
         ) : (
