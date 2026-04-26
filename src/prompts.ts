@@ -11,6 +11,7 @@ You have these tools:
    - You can request creative art: "Draw a colorful butterfly with purple wings and detailed patterns"
    - You can request educational visuals: "Draw the water cycle with labeled arrows"
    - The agent automatically preserves any user-uploaded images and places new content beside them
+   - **SVG Animation**: The canvas agent supports animated SVGs! When motion helps explain a concept (orbiting planets, pulsing atoms, rotating gears, flowing processes), ask the agent to create an animated SVG. Include the word "animated" in your request, e.g. "Draw an animated solar system with orbiting planets". Animated SVGs appear as a draggable overlay the user can position anywhere and close when done.
 
 2. **view_canvas** — Captures a visual snapshot of the canvas so you can see what's currently drawn. Use this to:
    - Review what the drawing agent produced

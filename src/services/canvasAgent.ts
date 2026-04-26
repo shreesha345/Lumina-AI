@@ -86,6 +86,15 @@ IMPORTANT RULES:
 - You can call multiple tools in sequence if needed
 - Keep SVGs clean with xmlns and viewBox attributes
 
+**SVG ANIMATION SUPPORT:**
+When the request mentions "animated", "animation", "moving", "orbiting", "pulsing", "rotating", or any motion concept, use SMIL animation elements in your SVG:
+- \`<animate>\` for attribute transitions (r, cx, cy, fill, opacity, etc.)
+- \`<animateTransform>\` for rotate/scale/translate
+- \`<animateMotion>\` + \`<mpath>\` for path-following motion
+- Use \`repeatCount="indefinite"\` for looping animations
+- Use \`dur="Xs"\` to set animation speed (2-4s is good)
+The system automatically detects these elements and renders the SVG as a live animated overlay that the user can drag anywhere on the canvas.
+
 === CANVAS SKILLS REFERENCE ===
 ${skillsDoc}
 === END SKILLS REFERENCE ===`;

@@ -12,7 +12,13 @@ export interface ExcalidrawAPI {
     getAppState: () => any;
     getFiles: () => any;
     updateScene: (params: { elements: any[] }) => void;
-    scrollToContent: (elements?: any[]) => void;
+    scrollToContent: (target?: any | any[], opts?: {
+        fitToContent?: boolean;
+        fitToViewport?: boolean;
+        viewportZoomFactor?: number;
+        animate?: boolean;
+        duration?: number;
+    }) => void;
     addFiles: (files: any[]) => void;
 }
 
@@ -509,9 +515,14 @@ export async function executeCanvasTool(
                 elements: [...existingElements, ...newElements],
             });
 
-            // Auto-scroll to fit everything (images + new content)
+            // Auto-scroll and zoom to fit all content in the viewport
             try {
-                excalidrawApi.scrollToContent();
+                excalidrawApi.scrollToContent(undefined, {
+                    fitToViewport: true,
+                    viewportZoomFactor: 0.85,
+                    animate: true,
+                    duration: 300,
+                });
             } catch (e) { }
 
             return {
@@ -554,6 +565,22 @@ export async function executeCanvasTool(
             const posY = yStr ? parseFloat(yStr) : 100;
             const displayW = wStr ? parseFloat(wStr) : svgW;
             const displayH = hStr ? parseFloat(hStr) : svgH;
+
+            // Detect if SVG contains animations (SMIL or CSS)
+            const hasAnimation = /<animate\b|<animateTransform\b|<animateMotion\b|<set\b|@keyframes\s|animation\s*:/i.test(svgString);
+
+            // If animated, show as a live overlay so animations actually play
+            // and skip embedding the static image on the canvas
+            if (hasAnimation) {
+                window.dispatchEvent(new CustomEvent('svg-animation-overlay', {
+                    detail: { svgHtml: svgString, label },
+                }));
+                console.log("[AI Tools] Animated SVG detected — rendering as live overlay only");
+                return {
+                    success: true,
+                    message: `Animated SVG shown as live overlay${label ? ` with label "${label}"` : ""}. The user can drag it anywhere and close it when done.`,
+                };
+            }
 
             // Convert SVG to base64 data URL
             const encoded = unescape(encodeURIComponent(svgString));
@@ -611,7 +638,15 @@ export async function executeCanvasTool(
                 elements: [...existingElements, ...converted],
             });
 
-            try { excalidrawApi.scrollToContent(); } catch (e) { }
+            // Auto-scroll and zoom to fit all content in the viewport
+            try {
+                excalidrawApi.scrollToContent(undefined, {
+                    fitToViewport: true,
+                    viewportZoomFactor: 0.85,
+                    animate: true,
+                    duration: 300,
+                });
+            } catch (e) { }
 
             return {
                 success: true,
