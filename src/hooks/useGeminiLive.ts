@@ -40,6 +40,7 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
     const [isProcessing, setIsProcessing] = useState(false); // true between send & first AI response
     const [isResponding, setIsResponding] = useState(false);
     const [isDrawing, setIsDrawing] = useState(false); // true when AI is calling canvas tools
+    const [isScreenSharing, setIsScreenSharing] = useState(false);
 
     // Mic capture refs
     const micContextRef = useRef<AudioContext | null>(null);
@@ -49,6 +50,13 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
     // Playback refs
     const playContextRef = useRef<AudioContext | null>(null);
     const playWorkletRef = useRef<AudioWorkletNode | null>(null);
+
+    // Screen Share refs
+    const screenStreamRef = useRef<MediaStream | null>(null);
+    const videoRef = useRef<HTMLVideoElement | null>(null);
+
+    // Continuous frame streaming interval
+    const frameIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     // GenAI session
     const sessionRef = useRef<any>(null);
@@ -66,6 +74,9 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
     // Auto-reconnect counter for 1008 server errors
     const reconnectAttemptsRef = useRef(0);
     const MAX_RECONNECT_ATTEMPTS = 3;
+
+    // Prevent double-connect from React StrictMode
+    const connectingRef = useRef(false);
 
     // ─── Playback engine using AudioWorklet ───
     const startPlaybackEngine = useCallback(async () => {
@@ -111,6 +122,184 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
         // If we can't inspect the socket, assume open (sends are wrapped in try-catch)
         return true;
     };
+
+    // ─── Capture a frame from a <video> element as base64 JPEG ───
+    const captureFrameFromVideo = useCallback((video: HTMLVideoElement): string | null => {
+        if (!video || video.videoWidth === 0 || video.videoHeight === 0) return null;
+        const canvas = document.createElement("canvas");
+        // Scale down to max 1024 on longest side (like the Python script)
+        const scale = Math.min(1, 1024 / Math.max(video.videoWidth, video.videoHeight));
+        canvas.width = Math.round(video.videoWidth * scale);
+        canvas.height = Math.round(video.videoHeight * scale);
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return null;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+        return dataUrl.split(",")[1];
+    }, []);
+
+    // ─── Continuous frame streaming (runs at ~1fps) ───
+    const startFrameStreaming = useCallback(() => {
+        if (frameIntervalRef.current) return; // already running
+        frameIntervalRef.current = setInterval(() => {
+            if (sendingPausedRef.current) return;
+            const session = sessionRef.current;
+            if (!session || !isSocketOpen(session)) return;
+
+            // Use screen share video
+            const video = videoRef.current;
+            if (!video) return;
+
+            const base64Data = captureFrameFromVideo(video);
+            if (!base64Data) return;
+
+            try {
+                session.sendRealtimeInput({
+                    video: {
+                        mimeType: "image/jpeg",
+                        data: base64Data,
+                    },
+                });
+            } catch (err: any) {
+                if (err?.message?.includes?.("CLOS")) return;
+                console.warn("[Gemini Live] Frame send error:", err?.message || err);
+            }
+        }, 1000); // 1 frame per second
+        console.log("[Gemini Live] Continuous frame streaming started (1fps)");
+    }, [captureFrameFromVideo]);
+
+    const stopFrameStreaming = useCallback(() => {
+        if (frameIntervalRef.current) {
+            clearInterval(frameIntervalRef.current);
+            frameIntervalRef.current = null;
+            console.log("[Gemini Live] Continuous frame streaming stopped");
+        }
+    }, []);
+
+    // ─── Screen Sharing ───
+    const startScreenShare = useCallback(async () => {
+        try {
+            const stream = await navigator.mediaDevices.getDisplayMedia({
+                video: {
+                    displaySurface: "browser",
+                },
+                audio: false,
+                // @ts-ignore
+                preferCurrentTab: true,
+            });
+            screenStreamRef.current = stream;
+            
+            const video = document.createElement("video");
+            video.autoplay = true;
+            video.playsInline = true;
+            video.muted = true;
+            video.srcObject = stream;
+            
+            await new Promise<void>((resolve) => {
+                video.onloadedmetadata = () => {
+                    video.play().then(() => resolve()).catch(() => resolve());
+                };
+            });
+            
+            videoRef.current = video;
+            setIsScreenSharing(true);
+            startFrameStreaming();
+
+            stream.getVideoTracks()[0].onended = () => {
+                screenStreamRef.current = null;
+                if (videoRef.current) {
+                    videoRef.current.pause();
+                    videoRef.current.srcObject = null;
+                    videoRef.current = null;
+                }
+                setIsScreenSharing(false);
+                stopFrameStreaming();
+            };
+        } catch (err) {
+            console.error("[Gemini Live] Error accessing screen share:", err);
+            setIsScreenSharing(false);
+        }
+    }, [startFrameStreaming, stopFrameStreaming]);
+
+    const stopScreenShare = useCallback(() => {
+        if (screenStreamRef.current) {
+            screenStreamRef.current.getTracks().forEach((t) => t.stop());
+            screenStreamRef.current = null;
+        }
+        if (videoRef.current) {
+            videoRef.current.pause();
+            videoRef.current.srcObject = null;
+            videoRef.current = null;
+        }
+        setIsScreenSharing(false);
+        stopFrameStreaming();
+    }, [stopFrameStreaming]);
+
+    const captureScreenSnapshot = useCallback(async (): Promise<any> => {
+        const session = sessionRef.current;
+        if (!session || !isSocketOpen(session)) {
+            return { error: "Session is not connected." };
+        }
+
+        const video = videoRef.current;
+        if (!video || !screenStreamRef.current) {
+            return { error: "Screen sharing is not active. The user needs to share their screen first." };
+        }
+
+        try {
+            if (video.videoWidth === 0 || video.videoHeight === 0) {
+                console.warn("[Gemini Live] Video dimensions are 0, snapshot might be empty. Trying to force play...");
+                await video.play().catch(e => console.warn("Play failed:", e));
+            }
+
+            const canvas = document.createElement("canvas");
+            // Fallback dimensions just in case videoWidth is still 0
+            canvas.width = video.videoWidth || 1280;
+            canvas.height = video.videoHeight || 720;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) return { error: "Failed to get canvas context" };
+            
+            // Fill with white background in case of transparency/errors
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // If the video actually has dimensions, draw it
+            if (video.videoWidth > 0 && video.videoHeight > 0) {
+                 ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            } else {
+                 console.warn("[Gemini Live] Drawing blank fallback frame because video dimensions are 0");
+                 // Draw some text so the AI knows it's broken rather than hallucinating
+                 ctx.fillStyle = "#000000";
+                 ctx.font = "24px Arial";
+                 ctx.fillText("Screen sharing feed is temporarily unavailable or loading.", 50, 50);
+            }
+            
+            // Get base64 string directly from canvas
+            const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+            const base64Data = dataUrl.split(",")[1];
+
+            // Send the screen image to the model
+            session.sendRealtimeInput({
+                video: {
+                    mimeType: "image/jpeg",
+                    data: base64Data,
+                },
+            });
+
+            console.log(`[Gemini Live] Screen snapshot sent`);
+
+            // Small delay so the frame is ingested before tool response
+            await new Promise((r) => setTimeout(r, 500));
+
+            return {
+                success: true,
+                message: `Screen image has been sent. Describe what you see on the user's screen.`,
+            };
+        } catch (err: any) {
+            console.error("[Gemini Live] Screen capture error:", err);
+            return { error: "Failed to capture screen: " + (err?.message || err) };
+        }
+    }, []);
 
     // ─── Capture the Excalidraw canvas as an image for the view_canvas tool ───
     const captureCanvasSnapshot = useCallback(async (): Promise<any> => {
@@ -194,6 +383,8 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
                     // Handle view_canvas locally — it needs access to excalidraw API & session
                     if (fc.name === "view_canvas") {
                         result = await captureCanvasSnapshot();
+                    } else if (fc.name === "view_screen") {
+                        result = await captureScreenSnapshot();
                     } else if (fc.name === "inspect_canvas") {
                         // Return structured canvas data (element types, positions, image bounds)
                         const api = excalidrawApiRef.current;
@@ -284,7 +475,8 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
 
     // ─── Connect to Gemini Live ───
     const connect = useCallback(async () => {
-        if (sessionRef.current) return;
+        if (sessionRef.current || connectingRef.current) return;
+        connectingRef.current = true;
 
         if (!API_KEY) {
             console.error("Missing VITE_GEMINI_API_KEY in .env");
@@ -402,6 +594,9 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
                         // Clean up mic
                         teardownMicPipeline();
 
+                        // Stop frame streaming
+                        stopFrameStreaming();
+
                         stopPlaybackEngine();
                         setIsRecording(false);
 
@@ -427,8 +622,10 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
             sessionRef.current = session;
         } catch (e) {
             console.error("Error connecting to Gemini", e);
+        } finally {
+            connectingRef.current = false;
         }
-    }, [handleToolCall, stopPlaybackEngine]);
+    }, [handleToolCall, stopPlaybackEngine, stopFrameStreaming]);
 
 
 
@@ -581,11 +778,26 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
             }
             sessionRef.current = null;
         }
+
+        // Stop frame streaming
+        stopFrameStreaming();
+
+        // Clean up screen share
+        if (screenStreamRef.current) {
+            screenStreamRef.current.getTracks().forEach((t) => t.stop());
+            screenStreamRef.current = null;
+        }
+        if (videoRef.current) {
+            videoRef.current.pause();
+            videoRef.current.srcObject = null;
+            videoRef.current = null;
+        }
+
         setIsConnected(false);
         teardownMicPipeline();
         setIsRecording(false);
         stopPlaybackEngine();
-    }, [teardownMicPipeline, stopPlaybackEngine]);
+    }, [teardownMicPipeline, stopPlaybackEngine, stopFrameStreaming]);
 
     return {
         isConnected,
@@ -593,10 +805,13 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
         isProcessing,
         isResponding,
         isDrawing,
+        isScreenSharing,
         connect,
         disconnect,
         startRecording,
         stopRecording,
         toggleRecording,
+        startScreenShare,
+        stopScreenShare,
     };
 }
