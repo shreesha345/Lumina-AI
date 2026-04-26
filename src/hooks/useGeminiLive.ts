@@ -1,13 +1,16 @@
 import { useRef, useState, useCallback } from "react";
 import { GoogleGenAI, Modality } from "@google/genai";
+import { exportToBlob } from "@excalidraw/excalidraw";
 import {
     canvasToolDeclarations,
     executeCanvasTool,
     type ExcalidrawAPI,
 } from "../services/aiTools";
+import { executeDrawingAgent } from "../services/canvasAgent";
 import { geminiLiveSystemInstruction } from "../prompts";
 
 const API_KEY = (import.meta as any).env.VITE_GEMINI_API_KEY || "";
+const MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
 
 function arrayBufferToBase64(buffer: ArrayBuffer) {
     let binary = "";
@@ -37,7 +40,6 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
     const [isProcessing, setIsProcessing] = useState(false); // true between send & first AI response
     const [isResponding, setIsResponding] = useState(false);
     const [isDrawing, setIsDrawing] = useState(false); // true when AI is calling canvas tools
-    const [isScreenSharing, setIsScreenSharing] = useState(false);
 
     // Mic capture refs
     const micContextRef = useRef<AudioContext | null>(null);
@@ -47,10 +49,6 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
     // Playback refs
     const playContextRef = useRef<AudioContext | null>(null);
     const playWorkletRef = useRef<AudioWorkletNode | null>(null);
-
-    // Screen sharing refs
-    const screenStreamRef = useRef<MediaStream | null>(null);
-    const screenTimerRef = useRef<any>(null);
 
     // GenAI session
     const sessionRef = useRef<any>(null);
@@ -114,6 +112,67 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
         return true;
     };
 
+    // ─── Capture the Excalidraw canvas as an image for the view_canvas tool ───
+    const captureCanvasSnapshot = useCallback(async (): Promise<any> => {
+        const api = excalidrawApiRef.current;
+        if (!api) {
+            return { error: "Canvas API not available." };
+        }
+
+        const session = sessionRef.current;
+        if (!session || !isSocketOpen(session)) {
+            return { error: "Session is not connected." };
+        }
+
+        const elements = api.getSceneElements().filter((e: any) => !e.isDeleted);
+        if (elements.length === 0) {
+            return { success: true, message: "The canvas is empty — nothing to see." };
+        }
+
+        try {
+            const blob = await exportToBlob({
+                elements,
+                appState: {
+                    ...api.getAppState(),
+                    exportWithDarkMode: false,
+                    exportBackground: true,
+                },
+                files: api.getFiles(),
+                maxWidthOrHeight: 1024,
+            });
+
+            // Convert blob to base64
+            const arrayBuffer = await blob.arrayBuffer();
+            const bytes = new Uint8Array(arrayBuffer);
+            let binary = "";
+            for (let i = 0; i < bytes.byteLength; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            const base64Data = btoa(binary);
+
+            // Send the canvas image to the model
+            session.sendRealtimeInput({
+                video: {
+                    mimeType: "image/png",
+                    data: base64Data,
+                },
+            });
+
+            console.log(`[Gemini Live] Canvas snapshot sent (${elements.length} elements)`);
+
+            // Small delay so the frame is ingested before tool response
+            await new Promise((r) => setTimeout(r, 500));
+
+            return {
+                success: true,
+                message: `Canvas image with ${elements.length} elements has been sent. Describe what you see on the canvas.`,
+            };
+        } catch (err: any) {
+            console.error("[Gemini Live] Canvas export error:", err);
+            return { error: "Failed to export canvas: " + (err?.message || err) };
+        }
+    }, [excalidrawApiRef]);
+
     // ─── Process a single tool call message ───
     const processToolCall = useCallback(
         async (toolCallMessage: any) => {
@@ -121,6 +180,8 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
             if (!session || !toolCallMessage.toolCall?.functionCalls) return;
 
             setIsDrawing(true);
+            // Pause mic/screen sending during tool execution to avoid overwhelming the session
+            sendingPausedRef.current = true;
             console.log("[Gemini Live] Tool call received:", toolCallMessage.toolCall.functionCalls);
 
             const functionResponses: any[] = [];
@@ -130,16 +191,41 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
 
                 let result: any;
                 try {
-                    const api = excalidrawApiRef.current;
-                    if (api) {
-                        result = await executeCanvasTool(fc.name, fc.args || {}, api);
+                    // Handle view_canvas locally — it needs access to excalidraw API & session
+                    if (fc.name === "view_canvas") {
+                        result = await captureCanvasSnapshot();
+                    } else if (fc.name === "inspect_canvas") {
+                        // Return structured canvas data (element types, positions, image bounds)
+                        const api = excalidrawApiRef.current;
+                        if (api) {
+                            result = await executeCanvasTool("inspect_canvas", {}, api);
+                        } else {
+                            result = { error: "Canvas API not available" };
+                        }
+                    } else if (fc.name === "draw_on_canvas") {
+                        // Delegate to the Gemini 2.0 Flash canvas agent
+                        const api = excalidrawApiRef.current;
+                        if (api) {
+                            const request = fc.args?.request || "";
+                            console.log(`[Gemini Live] Delegating to canvas agent: "${request}"`);
+                            result = await executeDrawingAgent(request, api);
+                        } else {
+                            result = { error: "Canvas API not available" };
+                        }
                     } else {
-                        result = { error: "Canvas API not available" };
+                        const api = excalidrawApiRef.current;
+                        if (api) {
+                            result = await executeCanvasTool(fc.name, fc.args || {}, api);
+                        } else {
+                            result = { error: "Canvas API not available" };
+                        }
                     }
                 } catch (err: any) {
                     console.error(`[Gemini Live] Tool execution error:`, err);
                     result = { error: err.message || "Tool execution failed" };
                 }
+
+                // For view_screen the result is already final (no _screenCapture indirection)
 
                 console.log(`[Gemini Live] Tool result for ${fc.name}:`, result);
 
@@ -162,9 +248,10 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
                 console.error("[Gemini Live] Failed to send tool response:", err?.message || err);
             }
 
+            sendingPausedRef.current = false;
             setIsDrawing(false);
         },
-        [excalidrawApiRef]
+        [excalidrawApiRef, captureCanvasSnapshot]
     );
 
     // ─── Handle tool calls with queue to prevent overlapping ───
@@ -207,9 +294,10 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
 
         try {
             const ai = new GoogleGenAI({ apiKey: API_KEY });
+            console.log("[Gemini Live] Connecting via Gemini API");
 
             const session = await ai.live.connect({
-                model: "gemini-2.5-flash-native-audio-preview-12-2025",
+                model: MODEL,
                 config: {
                     responseModalities: [Modality.AUDIO],
                     systemInstruction: geminiLiveSystemInstruction,
@@ -218,6 +306,11 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
                             prebuiltVoiceConfig: {
                                 voiceName: "Aoede",
                             },
+                        },
+                    },
+                    realtimeInputConfig: {
+                        automaticActivityDetection: {
+                            disabled: true,
                         },
                     },
                     tools: [
@@ -233,6 +326,17 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
                         reconnectAttemptsRef.current = 0;  // Reset on successful connect
                     },
                     onmessage: (message: any) => {
+                        // ── Handle tool call cancellation ──
+                        if (message.toolCallCancellation) {
+                            console.log("[Gemini Live] Tool call cancelled:", message.toolCallCancellation.ids);
+                            // Clear queued tool calls that were cancelled
+                            toolCallQueueRef.current = [];
+                            toolCallInProgressRef.current = false;
+                            sendingPausedRef.current = false;
+                            setIsDrawing(false);
+                            return;
+                        }
+
                         // ── Handle tool calls ──
                         if (message.toolCall) {
                             // handleToolCall is async but we intentionally don't await here
@@ -295,25 +399,16 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
                         toolCallInProgressRef.current = false;
                         sendingPausedRef.current = false;
 
-                        // Clean up mic and screen share
+                        // Clean up mic
                         teardownMicPipeline();
-
-                        if (screenTimerRef.current) {
-                            clearInterval(screenTimerRef.current);
-                            screenTimerRef.current = null;
-                        }
-                        if (screenStreamRef.current) {
-                            screenStreamRef.current.getTracks().forEach((t) => t.stop());
-                            screenStreamRef.current = null;
-                        }
 
                         stopPlaybackEngine();
                         setIsRecording(false);
-                        setIsScreenSharing(false);
 
-                        // Auto-reconnect on transient server errors
+                        // Auto-reconnect only on transient server errors (1011 = internal error)
+                        // 1008 = "not supported" — not transient, don't retry
                         const closeCode = e?.code || e;
-                        const isTransientError = closeCode === 1008 || closeCode === 1011;
+                        const isTransientError = closeCode === 1011;
                         if (isTransientError && reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
                             reconnectAttemptsRef.current++;
                             const delay = 2000 * reconnectAttemptsRef.current; // exponential-ish backoff
@@ -379,7 +474,7 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
             const base64Audio = arrayBufferToBase64(e.data);
             try {
                 session.sendRealtimeInput({
-                    media: {
+                    audio: {
                         data: base64Audio,
                         mimeType: "audio/pcm;rate=16000",
                     },
@@ -427,8 +522,18 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
             // Set up mic pipeline if not already done
             await ensureMicPipeline();
 
+            // Signal activity start to Gemini (manual VAD)
+            const session = sessionRef.current;
+            if (session && isSocketOpen(session)) {
+                try {
+                    session.sendRealtimeInput({ activityStart: {} });
+                    console.log("[Gemini Live] Sent activityStart");
+                } catch (err: any) {
+                    console.warn("[Gemini Live] Failed to send activityStart:", err?.message || err);
+                }
+            }
+
             // Enable sending — audio data will start flowing to Gemini
-            // (reopens the audio stream if audioStreamEnd was sent previously)
             micLiveRef.current = true;
 
             setIsRecording(true);
@@ -439,19 +544,18 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
 
     // ─── Stop recording (push-to-talk release) ───
     const stopRecording = useCallback(() => {
-        // Stop sending audio but keep the pipeline alive
+        // Stop sending audio but keep the pipeline alive.
         micLiveRef.current = false;
 
-        // Signal that the audio stream has ended — Gemini's automatic VAD
-        // will finalize the user turn and start generating a response
-        try {
-            const session = sessionRef.current;
-            if (session && isSocketOpen(session)) {
-                session.sendRealtimeInput({ audioStreamEnd: true });
-                console.log("[Gemini Live] audioStreamEnd sent — waiting for response");
+        // Signal activity end to Gemini (manual VAD)
+        const session = sessionRef.current;
+        if (session && isSocketOpen(session)) {
+            try {
+                session.sendRealtimeInput({ activityEnd: {} });
+                console.log("[Gemini Live] Sent activityEnd");
+            } catch (err: any) {
+                console.warn("[Gemini Live] Failed to send activityEnd:", err?.message || err);
             }
-        } catch (err: any) {
-            console.warn("[Gemini Live] Failed to send audioStreamEnd:", err?.message || err);
         }
 
         setIsRecording(false);
@@ -467,91 +571,7 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
     }, [isRecording, startRecording, stopRecording]);
 
     // ─── Screen Sharing: Send video frames to Gemini ───
-    const stopScreenShare = useCallback(() => {
-        if (screenTimerRef.current) {
-            clearInterval(screenTimerRef.current);
-            screenTimerRef.current = null;
-        }
-        if (screenStreamRef.current) {
-            screenStreamRef.current.getTracks().forEach((t) => t.stop());
-            screenStreamRef.current = null;
-        }
-        setIsScreenSharing(false);
-    }, []);
-
-    const startScreenShare = useCallback(async () => {
-        if (!sessionRef.current || !isConnected) {
-            console.warn("Cannot start screenshare: not connected to Gemini Live");
-            return;
-        }
-
-        try {
-            const stream = await navigator.mediaDevices.getDisplayMedia({
-                video: { frameRate: 1 },
-                audio: false
-            });
-            screenStreamRef.current = stream;
-
-            const videoElement = document.createElement("video");
-            videoElement.srcObject = stream;
-            videoElement.muted = true;
-            await videoElement.play();
-
-            const canvas = document.createElement("canvas");
-            const ctx = canvas.getContext("2d");
-
-            // Extract frames at a controlled rate to stop websocket 1011 overflow
-            screenTimerRef.current = setInterval(() => {
-                if (!sessionRef.current || !videoElement.videoWidth) return;
-                // Skip sending frames while a tool call is being processed
-                if (sendingPausedRef.current) return;
-
-                // Scale down slightly to preserve tokens & latency (512px as recommended for realtime)
-                const ratio = Math.min(512 / videoElement.videoWidth, 512 / videoElement.videoHeight);
-                canvas.width = videoElement.videoWidth * ratio;
-                canvas.height = videoElement.videoHeight * ratio;
-
-                ctx?.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-                const base64Data = canvas.toDataURL("image/jpeg", 0.45).split(",")[1];
-
-                try {
-                    if (isSocketOpen(sessionRef.current)) {
-                        sessionRef.current.sendRealtimeInput({
-                            media: {
-                                mimeType: "image/jpeg",
-                                data: base64Data
-                            }
-                        });
-                    }
-                } catch (err: any) {
-                    // Suppress WebSocket closed errors
-                    if (err?.message?.includes?.('CLOS')) return;
-                    console.error("sendRealtimeInput (screenshare) error:", err);
-                }
-            }, 3000);
-
-            // Handle user dragging 'stop sharing' via native browser button
-            stream.getVideoTracks()[0].onended = () => {
-                stopScreenShare();
-            };
-
-            setIsScreenSharing(true);
-        } catch (err: any) {
-            if (err.name === 'NotAllowedError') {
-                console.log("Screenshare cancelled by user.");
-            } else {
-                console.error("Error accessing screen sharing", err);
-            }
-            setIsScreenSharing(false);
-        }
-    }, [isConnected, stopScreenShare]);
-
-    const toggleScreenShare = useCallback(() => {
-        if (isScreenSharing) stopScreenShare();
-        else startScreenShare();
-    }, [isScreenSharing, startScreenShare, stopScreenShare]);
-
-    // Disconnect cleanup needs screen-share stop as well
+    // Disconnect cleanup
     const disconnect = useCallback(() => {
         if (sessionRef.current) {
             try {
@@ -565,8 +585,7 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
         teardownMicPipeline();
         setIsRecording(false);
         stopPlaybackEngine();
-        stopScreenShare();
-    }, [teardownMicPipeline, stopPlaybackEngine, stopScreenShare]);
+    }, [teardownMicPipeline, stopPlaybackEngine]);
 
     return {
         isConnected,
@@ -574,14 +593,10 @@ export function useGeminiLive({ excalidrawApiRef }: UseGeminiLiveOptions) {
         isProcessing,
         isResponding,
         isDrawing,
-        isScreenSharing,
         connect,
         disconnect,
         startRecording,
         stopRecording,
         toggleRecording,
-        startScreenShare,
-        stopScreenShare,
-        toggleScreenShare,
     };
 }

@@ -2,26 +2,34 @@
 class PlaybackProcessor extends AudioWorkletProcessor {
     constructor() {
         super();
-        this.ringBuffer = new Int16Array(24000 * 30); // 30s at 24kHz
+        // 30 seconds at 24kHz
+        this.capacity = 24000 * 30;
+        this.ringBuffer = new Float32Array(this.capacity); // store as float directly
         this.writePos = 0;
         this.readPos = 0;
 
         this.port.onmessage = (e) => {
             if (e.data === "clear") {
-                // Handle interruption — reset buffer
-                this.readPos = this.writePos;
+                // Interruption — fully reset
+                this.ringBuffer.fill(0);
+                this.writePos = 0;
+                this.readPos = 0;
                 return;
             }
-            const chunk = new Int16Array(e.data);
-            for (let i = 0; i < chunk.length; i++) {
-                this.ringBuffer[this.writePos % this.ringBuffer.length] = chunk[i];
+
+            // Incoming data is an ArrayBuffer of Int16 PCM
+            const int16 = new Int16Array(e.data);
+            const len = int16.length;
+
+            for (let i = 0; i < len; i++) {
+                this.ringBuffer[this.writePos % this.capacity] = int16[i] / 32768.0;
                 this.writePos++;
             }
-            // Prevent index overflow — normalize when both pointers are well past the buffer length
-            if (this.readPos > this.ringBuffer.length * 2 && this.writePos > this.ringBuffer.length * 2) {
-                const offset = this.readPos - (this.readPos % this.ringBuffer.length);
-                this.readPos -= offset;
-                this.writePos -= offset;
+
+            // If writer lapped the reader, snap reader forward to avoid stale/garbled audio
+            const buffered = this.writePos - this.readPos;
+            if (buffered > this.capacity) {
+                this.readPos = this.writePos - this.capacity;
             }
         };
     }
@@ -31,14 +39,25 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         if (!output || !output[0]) return true;
 
         const channel = output[0];
-        for (let i = 0; i < channel.length; i++) {
+        const len = channel.length;
+
+        for (let i = 0; i < len; i++) {
             if (this.readPos < this.writePos) {
-                channel[i] = this.ringBuffer[this.readPos % this.ringBuffer.length] / 32768.0;
+                channel[i] = this.ringBuffer[this.readPos % this.capacity];
                 this.readPos++;
             } else {
                 channel[i] = 0;
             }
         }
+
+        // Prevent unbounded index growth — normalize both positions periodically
+        // Only when indices are very large (no data corruption since we use modulo)
+        if (this.readPos > this.capacity * 100) {
+            const buffered = this.writePos - this.readPos;
+            this.readPos = this.readPos % this.capacity;
+            this.writePos = this.readPos + buffered;
+        }
+
         return true;
     }
 }

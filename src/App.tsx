@@ -45,12 +45,10 @@ function App() {
     isProcessing: isAudioProcessing,
     isResponding,
     isDrawing,
-    isScreenSharing,
     connect,
     disconnect,
     startRecording,
     stopRecording,
-    toggleScreenShare,
   } = useGeminiLive({ excalidrawApiRef });
 
   // Connect when switching to Live mode
@@ -186,7 +184,10 @@ function App() {
   }, [animatedSvg]);
 
   // Voice recognition (Gemini Live API)
-  // Track whether a push-to-talk just completed so click doesn't restart recording
+  // Distinguish click (toggle) from long-press (push-to-talk) using a hold timer.
+  // If mouse is held > 300ms before release, it's push-to-talk; otherwise it's a click toggle.
+  const holdTimerRef = useRef<any>(null);
+  const isHoldingRef = useRef(false);
   const justReleasedPushRef = useRef(false);
 
   const handleVoiceButtonClick = useCallback(() => {
@@ -195,6 +196,7 @@ function App() {
       justReleasedPushRef.current = false;
       return;
     }
+    // Click-toggle: start or stop recording
     if (isRecording) {
       voiceStateRef.current.mode = null;
       stopRecording();
@@ -205,13 +207,25 @@ function App() {
   }, [isRecording, startRecording, stopRecording]);
 
   const handleVoiceButtonDown = useCallback(() => {
-    if (voiceStateRef.current.mode !== 'click') {
-      voiceStateRef.current.mode = 'push';
-      startRecording();
-    }
+    // Don't activate push-to-talk if already recording via click-toggle
+    if (voiceStateRef.current.mode === 'click') return;
+    // Start a timer — if held long enough, enter push-to-talk mode
+    isHoldingRef.current = true;
+    holdTimerRef.current = setTimeout(() => {
+      if (isHoldingRef.current) {
+        voiceStateRef.current.mode = 'push';
+        startRecording();
+      }
+    }, 300);
   }, [startRecording]);
 
   const handleVoiceButtonUp = useCallback(() => {
+    isHoldingRef.current = false;
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    // Only stop if it was actually started via push-to-talk (held long enough)
     if (voiceStateRef.current.mode === 'push') {
       voiceStateRef.current.mode = null;
       justReleasedPushRef.current = true;
@@ -355,27 +369,6 @@ function App() {
                 {isAudioProcessing && <div className="voice-pulse processing-pulse"></div>}
                 {isResponding && <div className="voice-pulse responding-pulse"></div>}
               </div>
-
-              <button
-                className={`screen-share-btn ${isScreenSharing ? 'active' : ''}`}
-                onClick={toggleScreenShare}
-                title={isScreenSharing ? "Stop sharing screen" : "Share screen with Lumina"}
-              >
-                {isScreenSharing ? (
-                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M18.36 5.64a9 9 0 0 0-12.73 0" />
-                    <line x1="1" y1="1" x2="23" y2="23" />
-                    <rect width="18" height="13" x="3" y="3" rx="2" ry="2" />
-                  </svg>
-                ) : (
-                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect width="18" height="13" x="3" y="3" rx="2" ry="2" />
-                    <path d="M8 21h8" />
-                    <path d="M12 16v5" />
-                    <line x1="8" y1="11" x2="16" y2="11" />
-                  </svg>
-                )}
-              </button>
             </>
           )}
         </div>
