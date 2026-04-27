@@ -71,21 +71,31 @@ function App() {
   const [isAnimating, setIsAnimating] = useState(false);
   const [animatedSvg, setAnimatedSvg] = useState(null);
 
-  // Canvas SVG overlay (for AI-generated SVG animations)
-  const [svgOverlay, setSvgOverlay] = useState(null);
-  const svgOverlayTimerRef = useRef<any>(null);
-  const svgPipRef = useRef<HTMLDivElement>(null);
-  const svgPipDragRef = useRef({ dragging: false, startX: 0, startY: 0, origX: 0, origY: 0 });
+  // Canvas SVG overlays (multiple AI-generated SVG animations)
+  const [svgOverlays, setSvgOverlays] = useState<Array<{ id: string; html: string; x: number; y: number; width: number; height: number }>>([]);
+  const svgOverlayTimersRef = useRef<Record<string, any>>({});
+  const svgPipRefsMap = useRef<Record<string, HTMLDivElement | null>>({});
+  const svgPipDragRef = useRef({ dragging: false, panelId: '', startX: 0, startY: 0, origX: 0, origY: 0 });
 
-  // Drag handlers for the PiP panel
-  const handlePipDragStart = useCallback((e: React.MouseEvent) => {
-    const panel = svgPipRef.current;
+  // Remove a single overlay by id
+  const removeSvgOverlay = useCallback((id: string) => {
+    setSvgOverlays(prev => prev.filter(o => o.id !== id));
+    if (svgOverlayTimersRef.current[id]) {
+      clearTimeout(svgOverlayTimersRef.current[id]);
+      delete svgOverlayTimersRef.current[id];
+    }
+  }, []);
+
+  // Drag handlers for any PiP panel (by id)
+  const handlePipDragStart = useCallback((e: React.MouseEvent, panelId: string) => {
+    const panel = svgPipRefsMap.current[panelId];
     if (!panel) return;
     e.preventDefault();
     const rect = panel.getBoundingClientRect();
     const parentRect = panel.offsetParent?.getBoundingClientRect() || { left: 0, top: 0 };
     svgPipDragRef.current = {
       dragging: true,
+      panelId,
       startX: e.clientX,
       startY: e.clientY,
       origX: rect.left - parentRect.left,
@@ -93,13 +103,14 @@ function App() {
     };
     const onMove = (ev: MouseEvent) => {
       const d = svgPipDragRef.current;
-      if (!d.dragging || !svgPipRef.current) return;
+      const el = svgPipRefsMap.current[d.panelId];
+      if (!d.dragging || !el) return;
       const dx = ev.clientX - d.startX;
       const dy = ev.clientY - d.startY;
-      svgPipRef.current.style.left = `${d.origX + dx}px`;
-      svgPipRef.current.style.top = `${d.origY + dy}px`;
-      svgPipRef.current.style.right = 'auto';
-      svgPipRef.current.style.bottom = 'auto';
+      el.style.left = `${d.origX + dx}px`;
+      el.style.top = `${d.origY + dy}px`;
+      el.style.right = 'auto';
+      el.style.bottom = 'auto';
     };
     const onUp = () => {
       svgPipDragRef.current.dragging = false;
@@ -110,24 +121,34 @@ function App() {
     document.addEventListener('mouseup', onUp);
   }, []);
 
-  // Listen for animated SVG events from aiTools
+  // Listen for animated SVG events from aiTools (supports multiple overlays)
   useEffect(() => {
     const handler = (e: any) => {
-      const { svgHtml, label } = e.detail || {};
+      const { svgHtml, label, x, y, width, height } = e.detail || {};
       if (!svgHtml) return;
-      // Wrap with optional label
       const html = label
         ? `${svgHtml}<div class="svg-overlay-label">${label}</div>`
         : svgHtml;
-      setSvgOverlay(html);
-      // Auto-dismiss after 30s (user can close earlier)
-      if (svgOverlayTimerRef.current) clearTimeout(svgOverlayTimerRef.current);
-      svgOverlayTimerRef.current = setTimeout(() => setSvgOverlay(null), 30000);
+      const id = `svg_anim_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      const overlay = {
+        id,
+        html,
+        x: typeof x === 'number' ? x : -1,   // -1 means auto-position
+        y: typeof y === 'number' ? y : -1,
+        width: typeof width === 'number' ? width : 360,
+        height: typeof height === 'number' ? height : 400,
+      };
+      setSvgOverlays(prev => [...prev, overlay]);
+      // Auto-dismiss after 60s (user can close earlier)
+      svgOverlayTimersRef.current[id] = setTimeout(() => {
+        setSvgOverlays(prev => prev.filter(o => o.id !== id));
+        delete svgOverlayTimersRef.current[id];
+      }, 60000);
     };
     window.addEventListener('svg-animation-overlay', handler);
     return () => {
       window.removeEventListener('svg-animation-overlay', handler);
-      if (svgOverlayTimerRef.current) clearTimeout(svgOverlayTimerRef.current);
+      Object.values(svgOverlayTimersRef.current).forEach(t => clearTimeout(t));
     };
   }, []);
 
@@ -591,17 +612,25 @@ function App() {
                 </Excalidraw>
               </div>
 
-              {/* SVG Animation PiP (draggable floating panel — canvas stays interactive) */}
-              {svgOverlay && (
-                <div className="svg-pip-panel" ref={svgPipRef}>
-                  <div className="svg-pip-header" onMouseDown={handlePipDragStart}>
+              {/* SVG Animation PiP panels (multiple, draggable, freely positioned) */}
+              {svgOverlays.map((overlay, idx) => (
+                <div
+                  key={overlay.id}
+                  className="svg-pip-panel"
+                  ref={(el) => { svgPipRefsMap.current[overlay.id] = el; }}
+                  style={{
+                    ...(overlay.x >= 0 && overlay.y >= 0
+                      ? { left: overlay.x, top: overlay.y, right: 'auto', bottom: 'auto' }
+                      : { right: 16 + idx * 20, bottom: 16 + idx * 20 }),
+                    width: overlay.width,
+                    maxHeight: overlay.height,
+                  }}
+                >
+                  <div className="svg-pip-header" onMouseDown={(e) => handlePipDragStart(e, overlay.id)}>
                     <span className="svg-pip-title">▶ Animation</span>
                     <button
                       className="svg-pip-close"
-                      onClick={() => {
-                        setSvgOverlay(null);
-                        if (svgOverlayTimerRef.current) clearTimeout(svgOverlayTimerRef.current);
-                      }}
+                      onClick={() => removeSvgOverlay(overlay.id)}
                       title="Close animation"
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
@@ -612,10 +641,10 @@ function App() {
                   </div>
                   <div
                     className="svg-pip-content"
-                    dangerouslySetInnerHTML={{ __html: svgOverlay }}
+                    dangerouslySetInnerHTML={{ __html: overlay.html }}
                   />
                 </div>
-              )}
+              ))}
 
               {/* Animation Viewer */}
               {isAnimating && animatedSvg && (

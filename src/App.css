@@ -1097,11 +1097,7 @@ body {
 /* ===== SVG ANIMATION PiP PANEL ===== */
 .svg-pip-panel {
   position: absolute;
-  bottom: 16px;
-  right: 16px;
   z-index: 25;
-  width: 360px;
-  max-height: 400px;
   background: var(--bg-primary, #1e1e2e);
   border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
   border-radius: 12px;
