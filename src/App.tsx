@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Excalidraw, MainMenu, WelcomeScreen, exportToSvg } from '@excalidraw/excalidraw';
+import { Excalidraw, MainMenu, WelcomeScreen, exportToSvg, loadLibraryFromBlob, mergeLibraryItems } from '@excalidraw/excalidraw';
 import { animateSvg } from 'excalidraw-animate';
 import '@excalidraw/excalidraw/index.css';
 import './App.css';
@@ -12,6 +12,7 @@ import { useGeminiLive } from './hooks/useGeminiLive';
 
 
 function App() {
+  const LIBRARY_PRELOAD_CACHE_KEY = 'lumina.excalidraw.library-preload.v1';
   // App mode
   const [appMode, setAppMode] = useState('live'); // 'agentic' | 'live'
   const [showPlusMenu, setShowPlusMenu] = useState(false);
@@ -25,10 +26,11 @@ function App() {
   // PDF state
   const [paperData, setPaperData] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isImportingLibraries, setIsImportingLibraries] = useState(false);
+  const [isPreloadingLibraries, setIsPreloadingLibraries] = useState(false);
+  const [areLibrariesReady, setAreLibrariesReady] = useState(false);
   const [pdfCanvasFile, setPdfCanvasFile] = useState<File | null>(null);
-  const [webCanvasUrl, setWebCanvasUrl] = useState<string | null>(null);
   const [viewerTitle, setViewerTitle] = useState<string>('');
-  const [webInputUrl, setWebInputUrl] = useState('');
   const [isCanvasPdfDragOver, setIsCanvasPdfDragOver] = useState(false);
   const pdfDragDepthRef = useRef(0);
 
@@ -44,22 +46,18 @@ function App() {
 
   // Excalidraw API Reference
   const excalidrawApiRef = useRef(null);
+  const autoImportHandledRef = useRef(false);
+  const [isExcalidrawReady, setIsExcalidrawReady] = useState(false);
 
   const getPdfSelectionContext = useCallback(() => {
     return null;
   }, []);
 
-  const normalizeWebUrl = useCallback((raw: string) => {
-    const trimmed = raw.trim();
-    if (!trimmed) return '';
-    if (/^https?:\/\//i.test(trimmed)) return trimmed;
-    return `https://${trimmed}`;
-  }, []);
 
   const isPdfFile = useCallback((file: File | null | undefined) => {
     if (!file) return false;
     return file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
-  }, []);
+  }, [isExcalidrawReady]);
 
   const extractDroppedPdf = useCallback((dt: DataTransfer | null) => {
     if (!dt || !dt.files || dt.files.length === 0) return null;
@@ -200,7 +198,6 @@ function App() {
     setIsProcessing(true);
     setSidebarTab('chat');
     setPdfCanvasFile(file);
-    setWebCanvasUrl(null);
     setViewerTitle(file.name || 'PDF');
 
     try {
@@ -230,13 +227,236 @@ function App() {
     }
   }, [setMessages]);
 
-  const handleOpenWebInCanvas = useCallback(() => {
-    const normalized = normalizeWebUrl(webInputUrl);
-    if (!normalized) return;
-    setPdfCanvasFile(null);
-    setWebCanvasUrl(normalized);
-    setViewerTitle(normalized);
-  }, [normalizeWebUrl, webInputUrl]);
+  const handleImportExcalidrawLibraries = useCallback(async () => {
+    const api = excalidrawApiRef.current;
+    if (!api || isImportingLibraries) {
+      return { success: false, imported: 0, total: 0 };
+    }
+
+    setIsImportingLibraries(true);
+    try {
+      const manifestCandidates = [
+        'https://libraries.excalidraw.com/libraries.json',
+        'https://raw.githubusercontent.com/excalidraw/excalidraw-libraries/main/libraries.json',
+      ];
+
+      const extracted = new Set<string>();
+      let lastManifestError = '';
+
+      for (const manifestUrl of manifestCandidates) {
+        try {
+          const res = await fetch(manifestUrl);
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+          }
+
+          const manifest = await res.json();
+          if (!Array.isArray(manifest)) {
+            throw new Error('Manifest is not an array.');
+          }
+
+          for (const entry of manifest) {
+            const source = typeof entry?.source === 'string' ? entry.source : '';
+            if (!source || !/\.excalidrawlib$/i.test(source)) continue;
+            const normalized = new URL(`libraries/${source}`, 'https://libraries.excalidraw.com/').toString();
+            extracted.add(normalized);
+          }
+
+          if (extracted.size > 0) {
+            break;
+          }
+        } catch (error: any) {
+          lastManifestError = `${manifestUrl}: ${error?.message || 'Unknown error'}`;
+        }
+      }
+
+      const libraryUrls = Array.from(extracted);
+
+      if (libraryUrls.length === 0) {
+        throw new Error(`No public Excalidraw library URLs were found. ${lastManifestError}`.trim());
+      }
+
+      const failedUrls: string[] = [];
+      let mergedItems: any[] = [];
+
+      let cursor = 0;
+      const workers = Array.from({ length: 8 }, async () => {
+        while (cursor < libraryUrls.length) {
+          const i = cursor;
+          cursor += 1;
+          const url = libraryUrls[i];
+          try {
+            const libRes = await fetch(url);
+            if (!libRes.ok) {
+              failedUrls.push(url);
+              continue;
+            }
+
+            const blob = await libRes.blob();
+            const items = await loadLibraryFromBlob(blob, 'published');
+            mergedItems = mergeLibraryItems(mergedItems as any, items as any) as any[];
+          } catch {
+            failedUrls.push(url);
+          }
+        }
+      });
+
+      await Promise.all(workers);
+
+      if (mergedItems.length > 0) {
+        await api.updateLibrary({
+          libraryItems: mergedItems,
+          merge: true,
+          prompt: false,
+          openLibraryMenu: false,
+          defaultStatus: 'published',
+        });
+      }
+
+      const importedCount = libraryUrls.length - failedUrls.length;
+      const totalCount = libraryUrls.length;
+      const success = importedCount > 0;
+
+      if (success) {
+        setAreLibrariesReady(true);
+      }
+
+      api.setToast({
+        message: `Imported ${importedCount}/${totalCount} Excalidraw libraries.`,
+      });
+      return { success, imported: importedCount, total: totalCount };
+    } catch (err: any) {
+      console.error('Failed to import Excalidraw libraries:', err);
+      api.setToast({
+        message: `Library import failed: ${err?.message || 'Unknown error'}`,
+      });
+      return { success: false, imported: 0, total: 0 };
+    } finally {
+      setIsImportingLibraries(false);
+    }
+  }, [isImportingLibraries]);
+
+  useEffect(() => {
+    if (!isExcalidrawReady || isPreloadingLibraries || isImportingLibraries) return;
+
+    const api = excalidrawApiRef.current;
+    if (!api) return;
+
+    const cached = window.localStorage.getItem(LIBRARY_PRELOAD_CACHE_KEY);
+    if (cached) {
+      setAreLibrariesReady(true);
+      return;
+    }
+
+    let cancelled = false;
+
+    const preload = async () => {
+      setIsPreloadingLibraries(true);
+      const result = await handleImportExcalidrawLibraries();
+      if (cancelled) return;
+
+      if (result?.success) {
+        window.localStorage.setItem(
+          LIBRARY_PRELOAD_CACHE_KEY,
+          JSON.stringify({ importedAt: new Date().toISOString(), imported: result.imported, total: result.total }),
+        );
+        setAreLibrariesReady(true);
+      }
+
+      setIsPreloadingLibraries(false);
+    };
+
+    preload();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isExcalidrawReady, isPreloadingLibraries, isImportingLibraries, handleImportExcalidrawLibraries]);
+
+  useEffect(() => {
+    const api = excalidrawApiRef.current;
+    if (!api || autoImportHandledRef.current) return;
+
+    const extractFromParams = (params: URLSearchParams) => {
+      const values: string[] = [];
+      const direct = params.getAll('addLibrary');
+      for (const entry of direct) {
+        if (!entry) continue;
+        values.push(...entry.split(','));
+      }
+      return values;
+    };
+
+    const normalizeLibraryUrl = (candidate: string) => {
+      const trimmed = candidate.trim();
+      if (!trimmed) return null;
+      try {
+        const decoded = decodeURIComponent(trimmed);
+        const normalized = new URL(decoded, 'https://libraries.excalidraw.com/').toString();
+        return /\.excalidrawlib(?:[?#].*)?$/i.test(normalized) ? normalized : null;
+      } catch {
+        return null;
+      }
+    };
+
+    const searchParams = new URLSearchParams(window.location.search);
+    const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
+    const hashParams = new URLSearchParams(hash);
+    const candidates = [
+      ...extractFromParams(searchParams),
+      ...extractFromParams(hashParams),
+    ];
+
+    const libraryUrls = Array.from(
+      new Set(candidates.map(normalizeLibraryUrl).filter((url): url is string => Boolean(url))),
+    );
+
+    if (libraryUrls.length === 0) {
+      autoImportHandledRef.current = true;
+      return;
+    }
+
+    autoImportHandledRef.current = true;
+
+    const run = async () => {
+      let mergedItems: any[] = [];
+      let importedCount = 0;
+
+      for (const url of libraryUrls) {
+        try {
+          const response = await fetch(url);
+          if (!response.ok) continue;
+          const blob = await response.blob();
+          const items = await loadLibraryFromBlob(blob, 'published');
+          mergedItems = mergeLibraryItems(mergedItems as any, items as any) as any[];
+          importedCount += 1;
+        } catch {
+          // Ignore invalid addLibrary URL entries.
+        }
+      }
+
+      if (mergedItems.length > 0) {
+        await api.updateLibrary({
+          libraryItems: mergedItems,
+          merge: true,
+          prompt: false,
+          openLibraryMenu: false,
+          defaultStatus: 'published',
+        });
+      }
+
+      api.setToast({
+        message: importedCount > 0
+          ? `Imported ${importedCount} library link(s) from URL.`
+          : 'No valid addLibrary links were found in URL.',
+      });
+    };
+
+    run().catch((error) => {
+      console.error('Failed to import addLibrary URL(s):', error);
+      api.setToast({ message: 'Failed to import addLibrary URL(s).' });
+    });
+  }, []);
 
   const handleCanvasDragOverCapture = useCallback((e: React.DragEvent) => {
     const pdfFile = extractDroppedPdf(e.dataTransfer);
@@ -602,24 +822,19 @@ function App() {
                       isProcessing={isProcessing}
                     />
 
-                    <div className="web-link-card">
-                      <h4>Open Webpage</h4>
-                      <div className="web-link-row">
-                        <input
-                          type="text"
-                          className="web-link-input"
-                          value={webInputUrl}
-                          onChange={(e) => setWebInputUrl(e.target.value)}
-                          placeholder="Paste webpage link (example.com)"
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              handleOpenWebInCanvas();
-                            }
-                          }}
-                        />
-                        <button className="web-link-open-btn" onClick={handleOpenWebInCanvas}>Open</button>
-                      </div>
-                    </div>
+                    <button
+                      className="explain-btn open-pdf-canvas-btn"
+                      onClick={handleImportExcalidrawLibraries}
+                      disabled={isImportingLibraries || isPreloadingLibraries}
+                    >
+                      {isPreloadingLibraries
+                        ? 'Preloading Libraries...'
+                        : isImportingLibraries
+                          ? 'Importing Libraries...'
+                          : areLibrariesReady
+                            ? 'Libraries Ready (Re-sync)'
+                            : 'Import Excalidraw Libraries'}
+                    </button>
 
                     {paperData && (
                       <div className="paper-summary">
@@ -662,7 +877,6 @@ function App() {
                             const sourceFile = (paperData as any)?.rawFile || null;
                             if (sourceFile) {
                               setPdfCanvasFile(sourceFile);
-                              setWebCanvasUrl(null);
                               setViewerTitle(sourceFile.name || 'PDF');
                             }
                           }}
@@ -713,7 +927,10 @@ function App() {
               }}>
                 <Excalidraw
                   theme={isDarkMode ? "dark" : "light"}
-                  excalidrawAPI={(api) => { excalidrawApiRef.current = api; }}
+                  excalidrawAPI={(api) => {
+                    excalidrawApiRef.current = api;
+                    setIsExcalidrawReady(true);
+                  }}
                   UIOptions={{
                     canvasActions: {
                       changeViewBackgroundColor: true,
@@ -774,14 +991,13 @@ function App() {
               ))}
 
               {/* PDF panel overlay for zoom + marking */}
-              {(pdfCanvasFile || webCanvasUrl) && (
+              {pdfCanvasFile && (
                 <PdfCanvasOverlay
+                  key={`pdf-${pdfCanvasFile.name}`}
                   file={pdfCanvasFile}
-                  url={webCanvasUrl}
                   title={viewerTitle}
                   onClose={() => {
                     setPdfCanvasFile(null);
-                    setWebCanvasUrl(null);
                     setViewerTitle('');
                   }}
                 />

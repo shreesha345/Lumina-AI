@@ -3,7 +3,7 @@
 // The AI generates Excalidraw skeleton JSON, which is auto-converted to full elements.
 
 import { Type } from "@google/genai";
-import { convertToExcalidrawElements } from "@excalidraw/excalidraw";
+import { convertToExcalidrawElements, loadLibraryFromBlob, mergeLibraryItems } from "@excalidraw/excalidraw";
 
 // ─── Interfaces ───
 
@@ -20,18 +20,69 @@ export interface ExcalidrawAPI {
         duration?: number;
     }) => void;
     addFiles: (files: any[]) => void;
+    updateLibrary?: (params: {
+        libraryItems: any[];
+        merge?: boolean;
+        prompt?: boolean;
+        openLibraryMenu?: boolean;
+        defaultStatus?: "published" | "unpublished";
+    }) => Promise<void>;
 }
 
 // ─── Pointer Constants ───
 
 const POINTER_PREFIX = "__pointer_";
+const EXCALIDRAW_LIBRARIES_BASE = "https://libraries.excalidraw.com/";
+
+type PublicLibraryManifestEntry = {
+    id?: string;
+    name?: string;
+    source?: string;
+    description?: string;
+    itemNames?: string[];
+    authors?: Array<{ name?: string }>;
+};
+
+let manifestCache: { loadedAt: number; items: PublicLibraryManifestEntry[] } | null = null;
+
+async function fetchPublicLibrariesManifest(): Promise<PublicLibraryManifestEntry[]> {
+    const now = Date.now();
+    if (manifestCache && now - manifestCache.loadedAt < 5 * 60 * 1000) {
+        return manifestCache.items;
+    }
+
+    const manifestCandidates = [
+        "https://libraries.excalidraw.com/libraries.json",
+        "https://raw.githubusercontent.com/excalidraw/excalidraw-libraries/main/libraries.json",
+    ];
+
+    let lastError = "";
+    for (const url of manifestCandidates) {
+        try {
+            const response = await fetch(url);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            const json = await response.json();
+            if (!Array.isArray(json)) {
+                throw new Error("Manifest is not an array.");
+            }
+            manifestCache = { loadedAt: now, items: json as PublicLibraryManifestEntry[] };
+            return manifestCache.items;
+        } catch (err: any) {
+            lastError = `${url}: ${err?.message || "Unknown error"}`;
+        }
+    }
+
+    throw new Error(`Failed to fetch Excalidraw libraries manifest. ${lastError}`.trim());
+}
 
 // ─── Function Declarations for Gemini Live API (Manager Agent) ───
 // Manager tools cover drawing delegation, canvas inspection/viewing, clearing, and screen viewing.
 
 export const drawOnCanvasDeclaration = {
     name: "draw_on_canvas",
-    description: "Send a drawing request to the specialized canvas agent (Gemini 2.0 Flash). The agent will generate and execute Excalidraw diagrams, SVG illustrations, flowcharts, creative art, etc. on the canvas. Provide a detailed natural language description of what to draw, including colors, style, and layout. Examples: 'Draw a red heart with pink outline', 'Create a flowchart of user authentication with blue and green boxes', 'Draw a colorful butterfly', 'Illustrate the solar system with labeled planets'.",
+    description: "Send a drawing request to the specialized canvas agent (Gemini 2.0 Flash). The agent will generate and execute Excalidraw diagrams, SVG illustrations, flowcharts, creative art, etc. on the canvas. Use this for custom drawings, explanations, and non-library visuals. For icon/logo packs, prefer access_excalidraw_library first; only if no suitable library asset exists, use this tool to create a fresh custom substitute (single fallback draw). Provide a detailed natural language description of what to draw, including colors, style, and layout. Examples: 'Draw a red heart with pink outline', 'Create a flowchart of user authentication with blue and green boxes', 'Draw a colorful butterfly', 'Illustrate the solar system with labeled planets'.",
     parameters: {
         type: Type.OBJECT,
         properties: {
@@ -142,8 +193,36 @@ export const viewPdfSelectionDeclaration = {
     },
 };
 
+export const accessExcalidrawLibraryDeclaration = {
+    name: "access_excalidraw_library",
+    description: "Browse or import public Excalidraw libraries from the official libraries repository. This is the primary tool for prebuilt icons/logos/symbol packs. Use action='list' to search available libraries and action='import' to load one or more libraries into the current canvas library.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            action: {
+                type: Type.STRING,
+                description: "Action to perform: 'list' or 'import'.",
+            },
+            query: {
+                type: Type.STRING,
+                description: "Optional search query for library name/description/authors (used by list and import).",
+            },
+            limit: {
+                type: Type.STRING,
+                description: "Optional max number of libraries to return/import (default 10 for list, 5 for import).",
+            },
+            library_ids_csv: {
+                type: Type.STRING,
+                description: "Optional comma-separated library IDs or source names to import. Example: 'youritjang-software-architecture,cloud-cloud'.",
+            },
+        },
+        required: ["action"],
+    },
+};
+
 // ─── All tool declarations bundled for the Live API config ───
 export const canvasToolDeclarations = [
+    accessExcalidrawLibraryDeclaration,
     drawOnCanvasDeclaration,
     viewCanvasDeclaration,
     inspectCanvasDeclaration,
@@ -749,6 +828,137 @@ export async function executeCanvasTool(
                 success: true,
                 addedCount: newElements.length,
                 message: `Drew ${newElements.length} elements on the canvas.`,
+            };
+        }
+
+        case "access_excalidraw_library": {
+            const action = String(toolArgs?.action || "").toLowerCase().trim();
+            if (!["list", "import"].includes(action)) {
+                return { error: "Invalid action. Use 'list' or 'import'." };
+            }
+
+            const manifest = await fetchPublicLibrariesManifest();
+            const rawQuery = String(toolArgs?.query || "").trim();
+            const query = rawQuery.toLowerCase();
+            const requestedLimit = parseInt(String(toolArgs?.limit || ""), 10);
+            const defaultLimit = action === "list" ? 10 : 5;
+            const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+                ? Math.min(requestedLimit, 50)
+                : defaultLimit;
+
+            const librariesWithIds = manifest
+                .filter((entry) => typeof entry?.source === "string" && /\.excalidrawlib$/i.test(entry.source || ""))
+                .map((entry) => {
+                    const source = String(entry.source || "");
+                    const derivedId = source
+                        .toLowerCase()
+                        .replace(/\//g, "-")
+                        .replace(/\.excalidrawlib$/i, "");
+                    return {
+                        id: entry.id || derivedId,
+                        name: entry.name || derivedId,
+                        source,
+                        description: entry.description || "",
+                        itemNames: Array.isArray(entry.itemNames) ? entry.itemNames : [],
+                        authors: Array.isArray(entry.authors) ? entry.authors : [],
+                    };
+                });
+
+            const matchesQuery = (lib: any) => {
+                if (!query) return true;
+                const authorNames = lib.authors.map((a: any) => String(a?.name || "")).join(" ");
+                const itemNames = lib.itemNames.join(" ");
+                const haystack = `${lib.id} ${lib.name} ${lib.description} ${authorNames} ${itemNames}`.toLowerCase();
+                return haystack.includes(query);
+            };
+
+            const filtered = librariesWithIds.filter(matchesQuery);
+
+            if (action === "list") {
+                const preview = filtered.slice(0, limit).map((lib: any) => ({
+                    id: lib.id,
+                    name: lib.name,
+                    source: lib.source,
+                    author: lib.authors[0]?.name || null,
+                    description: lib.description,
+                    sampleItems: lib.itemNames.slice(0, 8),
+                }));
+
+                return {
+                    success: true,
+                    action: "list",
+                    totalMatches: filtered.length,
+                    returned: preview.length,
+                    libraries: preview,
+                    message: preview.length > 0
+                        ? `Found ${filtered.length} matching library/libraries. Showing ${preview.length}.`
+                        : "No matching Excalidraw libraries found.",
+                };
+            }
+
+            if (!excalidrawApi.updateLibrary) {
+                return { error: "Canvas library API is not available in this session." };
+            }
+
+            const requestedIds = parseCsvIds(toolArgs?.library_ids_csv).map((x) => x.toLowerCase());
+            let selected: any[] = [];
+            if (requestedIds.length > 0) {
+                const requestedSet = new Set(requestedIds);
+                selected = filtered.filter(
+                    (lib: any) => requestedSet.has(lib.id.toLowerCase()) || requestedSet.has(lib.source.toLowerCase()),
+                );
+            } else {
+                selected = filtered.slice(0, limit);
+            }
+
+            if (selected.length === 0) {
+                return {
+                    success: false,
+                    action: "import",
+                    importedCount: 0,
+                    message: "No libraries selected for import. Provide library_ids_csv or a broader query.",
+                };
+            }
+
+            let mergedItems: any[] = [];
+            const failed: string[] = [];
+            const imported: string[] = [];
+
+            for (const lib of selected) {
+                const url = new URL(`libraries/${lib.source}`, EXCALIDRAW_LIBRARIES_BASE).toString();
+                try {
+                    const response = await fetch(url);
+                    if (!response.ok) {
+                        failed.push(lib.id);
+                        continue;
+                    }
+                    const blob = await response.blob();
+                    const items = await loadLibraryFromBlob(blob, "published");
+                    mergedItems = mergeLibraryItems(mergedItems as any, items as any) as any[];
+                    imported.push(lib.id);
+                } catch {
+                    failed.push(lib.id);
+                }
+            }
+
+            if (mergedItems.length > 0) {
+                await excalidrawApi.updateLibrary({
+                    libraryItems: mergedItems,
+                    merge: true,
+                    prompt: false,
+                    openLibraryMenu: false,
+                    defaultStatus: "published",
+                });
+            }
+
+            return {
+                success: imported.length > 0,
+                action: "import",
+                importedCount: imported.length,
+                failedCount: failed.length,
+                imported,
+                failed,
+                message: `Imported ${imported.length}/${selected.length} selected Excalidraw libraries.`,
             };
         }
 
