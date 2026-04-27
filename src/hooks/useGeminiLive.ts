@@ -1,5 +1,5 @@
-import { useRef, useState, useCallback } from "react";
-import { GoogleGenAI, Modality } from "@google/genai";
+import { useRef, useState, useCallback, useEffect } from "react";
+import { GoogleGenAI, Modality, StartSensitivity, EndSensitivity } from "@google/genai";
 import { exportToBlob } from "@excalidraw/excalidraw";
 import {
     canvasToolDeclarations,
@@ -45,6 +45,7 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
     const [isResponding, setIsResponding] = useState(false);
     const [isDrawing, setIsDrawing] = useState(false); // true when AI is calling canvas tools
     const [isScreenSharing, setIsScreenSharing] = useState(false);
+    const [isHandsFreeMode, setIsHandsFreeMode] = useState(false);
 
     // Mic capture refs
     const micContextRef = useRef<AudioContext | null>(null);
@@ -125,6 +126,18 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
         // If we can't inspect the socket, assume open (sends are wrapped in try-catch)
         return true;
     };
+
+    const sendAudioStreamEndSignal = useCallback(() => {
+        const session = sessionRef.current;
+        if (!session || !isSocketOpen(session)) return;
+
+        try {
+            session.sendRealtimeInput({ audioStreamEnd: true });
+            console.log("[Gemini Live] Sent audioStreamEnd");
+        } catch (err: any) {
+            console.warn("[Gemini Live] Failed to send audioStreamEnd:", err?.message || err);
+        }
+    }, []);
 
     // ─── Analyze an image via Gemini REST API (since native audio model can't receive images) ───
     const analyzeImageViaRest = useCallback(async (base64Data: string, mimeType: string, prompt: string): Promise<string> => {
@@ -551,7 +564,11 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
                     },
                     realtimeInputConfig: {
                         automaticActivityDetection: {
-                            disabled: true,
+                            disabled: false,
+                            startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_LOW,
+                            endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_LOW,
+                            prefixPaddingMs: 20,
+                            silenceDurationMs: 300,
                         },
                     },
                     tools: [
@@ -765,17 +782,6 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
             // Set up mic pipeline if not already done
             await ensureMicPipeline();
 
-            // Signal activity start to Gemini (manual VAD)
-            const session = sessionRef.current;
-            if (session && isSocketOpen(session)) {
-                try {
-                    session.sendRealtimeInput({ activityStart: {} });
-                    console.log("[Gemini Live] Sent activityStart");
-                } catch (err: any) {
-                    console.warn("[Gemini Live] Failed to send activityStart:", err?.message || err);
-                }
-            }
-
             // Enable sending — audio data will start flowing to Gemini
             micLiveRef.current = true;
 
@@ -789,21 +795,14 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
     const stopRecording = useCallback(() => {
         // Stop sending audio but keep the pipeline alive.
         micLiveRef.current = false;
-
-        // Signal activity end to Gemini (manual VAD)
-        const session = sessionRef.current;
-        if (session && isSocketOpen(session)) {
-            try {
-                session.sendRealtimeInput({ activityEnd: {} });
-                console.log("[Gemini Live] Sent activityEnd");
-            } catch (err: any) {
-                console.warn("[Gemini Live] Failed to send activityEnd:", err?.message || err);
-            }
-        }
+        // Flush stream when mic is paused (recommended with automatic VAD).
+        sendAudioStreamEndSignal();
 
         setIsRecording(false);
-        setIsProcessing(true);
-    }, []);
+        if (!isHandsFreeMode) {
+            setIsProcessing(true);
+        }
+    }, [isHandsFreeMode, sendAudioStreamEndSignal]);
 
     const toggleRecording = useCallback(() => {
         if (isRecording) {
@@ -812,6 +811,43 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
             startRecording();
         }
     }, [isRecording, startRecording, stopRecording]);
+
+    const enableHandsFreeMode = useCallback(async () => {
+        setIsHandsFreeMode(true);
+        if (!isConnected || !sessionRef.current) return;
+
+        try {
+            await startPlaybackEngine();
+            await ensureMicPipeline();
+            micLiveRef.current = true;
+            setIsRecording(true);
+            setIsProcessing(false);
+        } catch (err) {
+            console.error("[Gemini Live] Failed to enable hands-free mode", err);
+        }
+    }, [isConnected, startPlaybackEngine, ensureMicPipeline]);
+
+    const disableHandsFreeMode = useCallback(() => {
+        setIsHandsFreeMode(false);
+        micLiveRef.current = false;
+        sendAudioStreamEndSignal();
+        setIsRecording(false);
+        setIsProcessing(false);
+    }, [sendAudioStreamEndSignal]);
+
+    const toggleHandsFreeMode = useCallback(() => {
+        if (isHandsFreeMode) {
+            disableHandsFreeMode();
+        } else {
+            enableHandsFreeMode();
+        }
+    }, [isHandsFreeMode, disableHandsFreeMode, enableHandsFreeMode]);
+
+    useEffect(() => {
+        if (isHandsFreeMode && isConnected && sessionRef.current) {
+            enableHandsFreeMode();
+        }
+    }, [isHandsFreeMode, isConnected, enableHandsFreeMode]);
 
     // ─── Screen Sharing: Send video frames to Gemini ───
     // Disconnect cleanup
@@ -850,11 +886,15 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
         isResponding,
         isDrawing,
         isScreenSharing,
+        isHandsFreeMode,
         connect,
         disconnect,
         startRecording,
         stopRecording,
         toggleRecording,
+        enableHandsFreeMode,
+        disableHandsFreeMode,
+        toggleHandsFreeMode,
         startScreenShare,
         stopScreenShare,
     };

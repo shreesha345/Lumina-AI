@@ -429,6 +429,49 @@ body {
   transform: translateX(-50%) translateY(0);
 }
 
+.voice-hover-menu {
+  position: absolute;
+  bottom: calc(100% + 56px);
+  left: 50%;
+  transform: translateX(-50%) translateY(8px);
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: none;
+  z-index: 1001;
+}
+
+.voice-btn:hover .voice-hover-menu {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+  pointer-events: auto;
+}
+
+.voice-hover-option {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+}
+
+.voice-hover-option:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.voice-hover-option.active {
+  border-color: var(--primary);
+  background: var(--primary-50);
+  color: var(--primary);
+}
+
 .voice-tooltip-key {
   background: linear-gradient(90deg, #93c5fd, #f0abfc);
   -webkit-background-clip: text;
