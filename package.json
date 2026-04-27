@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "remotion:studio": "remotion studio Sandbox/remotion/index.ts",
+    "remotion:render": "remotion render Sandbox/remotion/index.ts HelloRemotion Sandbox/out/hello-remotion.mp4 --enable-multiprocess-on-linux"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "^0.18.0",
@@ -20,6 +22,10 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@remotion/bundler": "^4.0.366",
+    "@remotion/cli": "^4.0.366",
+    "@remotion/renderer": "^4.0.366",
+    "@remotion/eslint-config": "^4.0.366",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
@@ -27,6 +33,7 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.5.0",
+    "remotion": "^4.0.366",
     "typescript": "^5.9.3",
     "vite": "^7.3.1"
   }
