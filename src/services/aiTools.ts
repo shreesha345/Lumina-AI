@@ -4,6 +4,7 @@
 
 import { Type } from "@google/genai";
 import { convertToExcalidrawElements, loadLibraryFromBlob, mergeLibraryItems } from "@excalidraw/excalidraw";
+import * as Chess from "./chessEngine";
 
 // ─── Interfaces ───
 
@@ -220,6 +221,37 @@ export const accessExcalidrawLibraryDeclaration = {
     },
 };
 
+export const chessGameDeclaration = {
+    name: "chess_game",
+    description: "Interactive chess game on the canvas. Creates a beautiful chess board with all pieces and lets you move them. The AI can also play against the user. Actions: 'start' (create board), 'move' (move a piece), 'ai_move' (AI makes a move), 'valid_moves' (show legal moves for a square), 'state' (get current game state), 'reset' (new game).",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            action: {
+                type: Type.STRING,
+                description: "Action to perform: 'start', 'move', 'ai_move', 'valid_moves', 'state', or 'reset'.",
+            },
+            from: {
+                type: Type.STRING,
+                description: "Source square for 'move' action, e.g. 'e2'. Uses algebraic notation (a-h for file, 1-8 for rank).",
+            },
+            to: {
+                type: Type.STRING,
+                description: "Destination square for 'move' action, e.g. 'e4'.",
+            },
+            square: {
+                type: Type.STRING,
+                description: "Square to query for 'valid_moves' action, e.g. 'e2'.",
+            },
+            promotion: {
+                type: Type.STRING,
+                description: "Piece to promote pawn to: 'Q', 'R', 'B', or 'N'. Default is 'Q' (queen).",
+            },
+        },
+        required: ["action"],
+    },
+};
+
 // ─── All tool declarations bundled for the Live API config ───
 export const canvasToolDeclarations = [
     accessExcalidrawLibraryDeclaration,
@@ -230,6 +262,7 @@ export const canvasToolDeclarations = [
     clearCanvasSelectionDeclaration,
     viewPdfSelectionDeclaration,
     viewScreenDeclaration,
+    chessGameDeclaration,
 ];
 
 function toExcalidrawSkeleton(elements: any[]): any[] {
@@ -960,6 +993,139 @@ export async function executeCanvasTool(
                 failed,
                 message: `Imported ${imported.length}/${selected.length} selected Excalidraw libraries.`,
             };
+        }
+
+        case "chess_game": {
+            const action = String(toolArgs?.action || "").toLowerCase().trim();
+
+            // Helper: render chess board SVG onto the canvas, replacing the old one
+            const renderChessBoard = (state: Chess.GameState, highlights?: string[]) => {
+                const svgString = Chess.renderSvg(state, highlights);
+                const encoded = unescape(encodeURIComponent(svgString));
+                const base64 = btoa(encoded);
+                const dataURL = `data:image/svg+xml;base64,${base64}`;
+                const fileId = `chess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+                (excalidrawApi as any).addFiles([{
+                    id: fileId as any, mimeType: "image/svg+xml" as any,
+                    dataURL: dataURL as any, created: Date.now(),
+                }]);
+
+                const imageElement: any = {
+                    type: "image", x: 100, y: 50, width: 560, height: 600,
+                    fileId, status: "saved", id: fileId + "_el",
+                };
+
+                // Remove old chess board if exists
+                const oldId = Chess.getBoardElementId();
+                let existingElements = [...excalidrawApi.getSceneElements()];
+                if (oldId) {
+                    existingElements = existingElements.filter((e: any) => e.id !== oldId && e.fileId !== oldId.replace('_el', ''));
+                }
+
+                let converted: any[];
+                try {
+                    converted = convertToExcalidrawElements([imageElement] as any, { regenerateIds: false });
+                } catch (err) {
+                    return { error: "Failed to render chess board: " + String(err) };
+                }
+
+                excalidrawApi.updateScene({ elements: [...existingElements, ...converted] });
+                Chess.setBoardElementId(fileId + "_el");
+
+                try {
+                    excalidrawApi.scrollToContent(undefined, {
+                        fitToViewport: true, viewportZoomFactor: 0.85,
+                        animate: true, duration: 300,
+                    });
+                } catch (_e) { }
+
+                return null; // success
+            };
+
+            if (action === "start" || action === "reset") {
+                const state = Chess.startGame();
+                const err = renderChessBoard(state);
+                if (err) return err;
+                return {
+                    success: true,
+                    message: "Chess board created! All pieces are placed. White plays first. Use action='move' with 'from' and 'to' squares (e.g., from='e2', to='e4') to move pieces. Use action='ai_move' for the AI to make a move.",
+                    turn: state.turn,
+                };
+            }
+
+            if (action === "move") {
+                const from = String(toolArgs?.from || "").toLowerCase().trim();
+                const to = String(toolArgs?.to || "").toLowerCase().trim();
+                if (!from || !to) return { error: "'move' action requires 'from' and 'to' squares (e.g., from='e2', to='e4')." };
+
+                const result = Chess.makeMove(from, to, toolArgs?.promotion);
+                if (!result.ok) return { error: result.error };
+
+                const err = renderChessBoard(result.state);
+                if (err) return err;
+                return {
+                    success: true,
+                    notation: result.notation,
+                    message: `Moved ${from} to ${to} (${result.notation}). ${result.state.status === 'check' ? 'Check!' : result.state.status === 'checkmate' ? 'Checkmate! ' + result.state.winner + ' wins!' : result.state.status === 'stalemate' ? 'Stalemate — draw!' : result.state.turn + ' to move.'}`,
+                    turn: result.state.turn,
+                    status: result.state.status,
+                    winner: result.state.winner,
+                };
+            }
+
+            if (action === "ai_move") {
+                const result = Chess.makeAiMove();
+                if (!result.ok) return { error: result.error };
+
+                const err = renderChessBoard(result.state);
+                if (err) return err;
+                return {
+                    success: true,
+                    from: result.from,
+                    to: result.to,
+                    notation: result.notation,
+                    message: `AI moved ${result.from} to ${result.to} (${result.notation}). ${result.state.status === 'check' ? 'Check!' : result.state.status === 'checkmate' ? 'Checkmate! ' + result.state.winner + ' wins!' : result.state.status === 'stalemate' ? 'Stalemate — draw!' : result.state.turn + ' to move.'}`,
+                    turn: result.state.turn,
+                    status: result.state.status,
+                    winner: result.state.winner,
+                };
+            }
+
+            if (action === "valid_moves") {
+                const square = String(toolArgs?.square || "").toLowerCase().trim();
+                if (!square) return { error: "'valid_moves' action requires 'square' parameter (e.g., square='e2')." };
+
+                const moves = Chess.getValidMoves(square);
+                const state = Chess.getState();
+                if (state && moves.length > 0) {
+                    const err = renderChessBoard(state, moves);
+                    if (err) return err;
+                }
+                return {
+                    success: true,
+                    square,
+                    validMoves: moves,
+                    message: moves.length > 0 ? `Valid moves for ${square}: ${moves.join(', ')}` : `No valid moves for ${square}.`,
+                };
+            }
+
+            if (action === "state") {
+                const state = Chess.getState();
+                if (!state) return { error: "No game in progress. Use action='start' first." };
+                return {
+                    success: true,
+                    turn: state.turn,
+                    status: state.status,
+                    winner: state.winner,
+                    moveCount: state.history.length,
+                    lastMove: state.lastMove,
+                    capturedByWhite: state.capturedByWhite,
+                    capturedByBlack: state.capturedByBlack,
+                };
+            }
+
+            return { error: `Unknown chess action: '${action}'. Use 'start', 'move', 'ai_move', 'valid_moves', 'state', or 'reset'.` };
         }
 
         case "add_svg": {
