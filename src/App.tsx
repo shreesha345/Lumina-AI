@@ -7,6 +7,7 @@ import './App.css';
 import FileUpload from './components/FileUpload';
 import ChatHistory from './components/ChatHistory';
 import PdfCanvasOverlay from './components/PdfCanvasOverlay';
+import ChessBoard from './components/ChessBoard';
 import { parsePdf } from './services/pdfParser';
 import { useGeminiLive } from './hooks/useGeminiLive';
 
@@ -35,6 +36,9 @@ function App() {
   const [isCanvasPdfDragOver, setIsCanvasPdfDragOver] = useState(false);
   const pdfDragDepthRef = useRef(0);
 
+  // Chess state
+  const [showChessBoard, setShowChessBoard] = useState(false);
+
   // Chat state (separate per mode)
   const [liveMessages, setLiveMessages] = useState([]);
   const [agenticMessages, setAgenticMessages] = useState([]);
@@ -52,6 +56,38 @@ function App() {
 
   const getPdfSelectionContext = useCallback(() => {
     return null;
+  }, []);
+
+  // Handle user chess moves from the interactive board
+  const handleUserChessMove = useCallback((from: string, to: string) => {
+    console.log(`[App] User moved: ${from} → ${to}`);
+    // The move is already executed by the ChessBoard component
+    // Now we need to check if it's the AI's turn and notify it
+    const isAiTurn = (window as any).Chess?.isAiTurn?.();
+    if (isAiTurn) {
+      // Trigger AI to make its move via voice/tool
+      console.log('[App] AI\'s turn now - waiting for AI to respond');
+    }
+  }, []);
+
+  // Listen for chess game start/updates
+  useEffect(() => {
+    const handleChessStart = () => {
+      setShowChessBoard(true);
+    };
+
+    const handleChessEnd = () => {
+      // Keep board visible even after game ends
+      // User can start a new game
+    };
+
+    window.addEventListener('chess-game-started', handleChessStart);
+    window.addEventListener('chess-game-ended', handleChessEnd);
+
+    return () => {
+      window.removeEventListener('chess-game-started', handleChessStart);
+      window.removeEventListener('chess-game-ended', handleChessEnd);
+    };
   }, []);
 
 
@@ -578,54 +614,37 @@ function App() {
   }, [animatedSvg]);
 
   // Voice recognition (Gemini Live API)
-  // Distinguish click (toggle) from long-press (push-to-talk) using a hold timer.
-  // If mouse is held > 300ms before release, it's push-to-talk; otherwise it's a click toggle.
+  // Push-to-talk: Hold mouse button or Ctrl+Space to record
+  // Hands-free: Toggle with Ctrl+H for continuous listening
   const holdTimerRef = useRef<any>(null);
   const isHoldingRef = useRef(false);
-  const justReleasedPushRef = useRef(false);
 
   const handleVoiceButtonClick = useCallback(() => {
+    // In hands-free mode, clicking does nothing (always listening)
     if (isHandsFreeMode) return;
-    // If a push-to-talk cycle just ended on mouseup, skip the click event
-    if (justReleasedPushRef.current) {
-      justReleasedPushRef.current = false;
-      return;
-    }
-    // Click-toggle: start or stop recording
-    if (isRecording) {
-      voiceStateRef.current.mode = null;
-      stopRecording();
-    } else {
-      voiceStateRef.current.mode = 'click';
-      startRecording();
-    }
-  }, [isHandsFreeMode, isRecording, startRecording, stopRecording]);
+    
+    // In push-to-talk mode, clicking does nothing (must hold)
+    // This prevents accidental clicks from toggling recording
+    return;
+  }, [isHandsFreeMode]);
 
   const handleVoiceButtonDown = useCallback(() => {
     if (isHandsFreeMode) return;
-    // Don't activate push-to-talk if already recording via click-toggle
-    if (voiceStateRef.current.mode === 'click') return;
-    // Start a timer — if held long enough, enter push-to-talk mode
+    
+    // Start push-to-talk immediately on mouse down
     isHoldingRef.current = true;
-    holdTimerRef.current = setTimeout(() => {
-      if (isHoldingRef.current) {
-        voiceStateRef.current.mode = 'push';
-        startRecording();
-      }
-    }, 300);
+    voiceStateRef.current.mode = 'push';
+    startRecording();
   }, [isHandsFreeMode, startRecording]);
 
   const handleVoiceButtonUp = useCallback(() => {
     if (isHandsFreeMode) return;
+    
     isHoldingRef.current = false;
-    if (holdTimerRef.current) {
-      clearTimeout(holdTimerRef.current);
-      holdTimerRef.current = null;
-    }
-    // Only stop if it was actually started via push-to-talk (held long enough)
+    
+    // Stop recording when button is released
     if (voiceStateRef.current.mode === 'push') {
       voiceStateRef.current.mode = null;
-      justReleasedPushRef.current = true;
       stopRecording();
     }
   }, [isHandsFreeMode, stopRecording]);
@@ -640,18 +659,21 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (e) => {
+      // Ctrl+H toggles hands-free mode
       if (e.ctrlKey && String(e.key || '').toLowerCase() === 'h') {
         e.preventDefault();
         toggleHandsFreeMode();
         return;
       }
 
+      // In hands-free mode, don't handle push-to-talk
       if (isHandsFreeMode) return;
 
+      // Ctrl+Space for push-to-talk
       if (e.ctrlKey && e.code === 'Space') {
         e.preventDefault();
-        // If it's running via click mode, ignore the push-to-talk key
-        if (voiceStateRef.current.mode !== 'click') {
+        // Start recording if not already recording
+        if (voiceStateRef.current.mode !== 'push') {
           voiceStateRef.current.mode = 'push';
           startRecording();
         }
@@ -659,10 +681,12 @@ function App() {
     };
 
     const handleKeyUp = (e) => {
+      // In hands-free mode, don't handle push-to-talk
       if (isHandsFreeMode) return;
-      if (e.code === 'Space') {
+      
+      // Release Ctrl+Space to stop recording
+      if (e.ctrlKey && e.code === 'Space') {
         e.preventDefault();
-        // Only stop if it was started via push mode
         if (voiceStateRef.current.mode === 'push') {
           voiceStateRef.current.mode = null;
           stopRecording();
@@ -743,9 +767,9 @@ function App() {
               >
                 <div className="voice-tooltip">
                   {isHandsFreeMode
-                    ? 'Hands-free enabled: just talk naturally (Ctrl+H to disable)'
+                    ? 'Hands-free mode: always listening (Ctrl+H to disable)'
                     : isConnected
-                      ? 'Hold to talk, release to send (Ctrl+Space). Toggle hands-free: Ctrl+H'
+                      ? 'Push-to-talk: Hold button or Ctrl+Space to speak. Toggle hands-free: Ctrl+H'
                       : 'Connecting to Gemini Live...'}
                 </div>
                 <div className="voice-hover-menu">
@@ -788,7 +812,7 @@ function App() {
                       ? 'Processing...'
                       : isRecording
                         ? (isHandsFreeMode ? 'Listening...' : 'Recording...')
-                        : (isConnected ? (isHandsFreeMode ? 'Hands-free Ready' : 'Hold to Talk') : 'Connecting...')}
+                        : (isConnected ? (isHandsFreeMode ? 'Hands-free Active' : 'Push to Talk') : 'Connecting...')}
                 </span>
                 {isRecording && <div className="voice-pulse"></div>}
                 {isAudioProcessing && <div className="voice-pulse processing-pulse"></div>}
@@ -1043,6 +1067,25 @@ function App() {
                     setViewerTitle('');
                   }}
                 />
+              )}
+
+              {/* Interactive Chess Board */}
+              {showChessBoard && (
+                <div className="chess-board-overlay">
+                  <div className="chess-board-panel">
+                    <button
+                      className="chess-board-close"
+                      onClick={() => setShowChessBoard(false)}
+                      title="Hide chess board"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                    </button>
+                    <ChessBoard onUserMove={handleUserChessMove} />
+                  </div>
+                </div>
               )}
 
               {isCanvasPdfDragOver && (
