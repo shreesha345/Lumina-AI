@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 import fs from 'fs'
 import path from 'path'
 
@@ -54,7 +55,7 @@ function memoryApiPlugin() {
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), memoryApiPlugin()],
+  plugins: [react(), tailwindcss(), memoryApiPlugin()],
   server: {
     host: '127.0.0.1',
     hmr: {
