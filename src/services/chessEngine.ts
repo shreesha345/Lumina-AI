@@ -35,6 +35,7 @@ const FILES = 'abcdefgh';
 
 let gameState: GameState | null = null;
 let boardElementId: string | null = null;
+let boardColors = { light: '#f0d9b5', dark: '#b58863', border: '#6b4c2a' };
 
 // ========== Coordinate Helpers ==========
 
@@ -299,10 +300,10 @@ function pickAiMove(st: GameState): { from: string; to: string } | null {
 // ========== SVG Rendering ==========
 
 export function renderSvg(st: GameState, highlights?: string[]): string {
-    const L = '#f0d9b5', D = '#b58863', SQ = 60, O = 40;
+    const L = boardColors.light, D = boardColors.dark, SQ = 60, O = 40;
     let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 600">`;
     // Board bg
-    s += `<rect x="32" y="32" width="496" height="496" rx="6" fill="#6b4c2a"/>`;
+    s += `<rect x="32" y="32" width="496" height="496" rx="6" fill="${boardColors.border}"/>`;
     // Title
     let title = 'Chess';
     if (st.status === 'checkmate') title = `Checkmate! ${st.winner === 'white' ? 'White' : 'Black'} wins!`;
@@ -425,3 +426,9 @@ export function resetGame(): GameState { return startGame(); }
 export function getBoardElementId(): string | null { return boardElementId; }
 export function setBoardElementId(id: string) { boardElementId = id; }
 export function clearBoardElementId() { boardElementId = null; }
+export function setBoardColors(light?: string, dark?: string, border?: string) {
+    if (light) boardColors.light = light;
+    if (dark) boardColors.dark = dark;
+    if (border) boardColors.border = border;
+}
+export function getBoardColors() { return { ...boardColors }; }
