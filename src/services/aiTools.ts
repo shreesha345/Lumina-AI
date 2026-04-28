@@ -268,6 +268,50 @@ export const chessGameDeclaration = {
     },
 };
 
+export const readMemoryDeclaration = {
+    name: "read_memory",
+    description: "Read the persistent user profile memory to understand the user's preferences, interests, and learning style.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {},
+        required: []
+    }
+};
+
+export const writeMemoryDeclaration = {
+    name: "write_memory",
+    description: "Write the initial user profile to persistent memory after the onboarding discovery.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            preferred_visual_type: { type: Type.STRING, description: "e.g., 'svg', 'whiteboard drawing', 'animation', 'text explanation'" },
+            learning_style: { type: Type.STRING, description: "e.g., 'visual + step-by-step'" },
+            hobbies: { type: Type.ARRAY, items: { type: Type.STRING }, description: "User's hobbies." },
+            interests: { type: Type.ARRAY, items: { type: Type.STRING }, description: "User's topics of interest." },
+            skill_level: { type: Type.STRING, description: "e.g., 'beginner', 'intermediate', 'advanced'" },
+            preferred_examples: { type: Type.STRING, description: "What kind of examples the user likes." }
+        },
+        required: ["preferred_visual_type", "learning_style", "skill_level"]
+    }
+};
+
+export const updateMemoryDeclaration = {
+    name: "update_memory",
+    description: "Update specific fields in the user's persistent memory if new preferences are discovered.",
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            preferred_visual_type: { type: Type.STRING },
+            learning_style: { type: Type.STRING },
+            hobbies: { type: Type.ARRAY, items: { type: Type.STRING } },
+            interests: { type: Type.ARRAY, items: { type: Type.STRING } },
+            skill_level: { type: Type.STRING },
+            preferred_examples: { type: Type.STRING }
+        },
+        required: []
+    }
+};
+
 // ─── All tool declarations bundled for the Live API config ───
 export const canvasToolDeclarations = [
     accessExcalidrawLibraryDeclaration,
@@ -279,6 +323,9 @@ export const canvasToolDeclarations = [
     viewPdfSelectionDeclaration,
     viewScreenDeclaration,
     chessGameDeclaration,
+    readMemoryDeclaration,
+    writeMemoryDeclaration,
+    updateMemoryDeclaration,
 ];
 
 function toExcalidrawSkeleton(elements: any[]): any[] {
@@ -351,8 +398,20 @@ function toExcalidrawSkeleton(elements: any[]): any[] {
 
         // ── Text elements ──
         if (el.type === "text") {
-            skeleton.text = el.text || el.labelText || "";
+            // Support multiple formats the AI model may use:
+            // 1. {text: "Hello"} — standard
+            // 2. {labelText: "Hello"} — alternative
+            // 3. {label: {text: "Hello", fontSize: 16}} — model sometimes uses label object
+            // 4. {label: "Hello"} — label as plain string
+            const resolvedText =
+                el.text ||
+                el.labelText ||
+                (el.label && typeof el.label === "object" ? el.label.text : null) ||
+                (typeof el.label === "string" ? el.label : null) ||
+                "";
+            skeleton.text = resolvedText;
             if (el.fontSize) skeleton.fontSize = el.fontSize;
+            else if (el.label?.fontSize) skeleton.fontSize = el.label.fontSize;
         }
 
         // ── Arrows and lines ──
@@ -542,6 +601,27 @@ function intersectsBBox(el: any, box: { x: number; y: number; width: number; hei
     return ex < rx2 && ex2 > rx1 && ey < ry2 && ey2 > ry1;
 }
 
+// ─── Robust JSON Parser for AI Outputs ───
+// Handles common formatting errors like unescaped newlines within strings
+// and trailing commas which frequently break JSON.parse.
+function safelyParseJSON(jsonStr: string): any {
+    try {
+        return JSON.parse(jsonStr);
+    } catch (e) {
+        try {
+            // Attempt 1: Fix unescaped newlines inside strings.
+            // Replace literal newline characters with \\n
+            let fixedStr = jsonStr.replace(/\n/g, "\\n");
+            // Attempt 2: Fix trailing commas
+            fixedStr = fixedStr.replace(/,\s*([\]}])/g, "$1");
+            return JSON.parse(fixedStr);
+        } catch (e2) {
+            // Throw original error if fixes don't work
+            throw e;
+        }
+    }
+}
+
 // ─── Main Tool Execution ───
 
 export async function executeCanvasTool(
@@ -549,7 +629,9 @@ export async function executeCanvasTool(
     toolArgs: any,
     excalidrawApi: ExcalidrawAPI
 ): Promise<any> {
+    console.log(`[AI Tools] executeCanvasTool ENTERED: toolName=${toolName}`);
     if (!excalidrawApi) {
+        console.error(`[AI Tools] excalidrawApi is falsy!`);
         return { error: "Canvas API not available yet." };
     }
 
@@ -577,6 +659,28 @@ export async function executeCanvasTool(
             // Compute bounding box of all images for spatial awareness
             const images = simplified.filter((e: any) => e.type === "image");
             const embeddables = simplified.filter((e: any) => ["embeddable", "iframe"].includes(e.type));
+
+            // Check DOM for interactive PDF/Image overlay panels floating over the canvas
+            const appState = excalidrawApi.getAppState();
+            document.querySelectorAll('.pdf-overlay-panel').forEach((el) => {
+                const rect = el.getBoundingClientRect();
+                // Convert screen viewport coordinates -> Excalidraw scene coordinates
+                const sceneX = (rect.x - appState.scrollX) / appState.zoom.value;
+                const sceneY = (rect.y - appState.scrollY) / appState.zoom.value;
+                const sceneW = rect.width / appState.zoom.value;
+                const sceneH = rect.height / appState.zoom.value;
+                images.push({
+                    id: "virtual_pdf_overlay",
+                    type: "virtual_pdf_overlay",
+                    x: sceneX,
+                    y: sceneY,
+                    width: sceneW,
+                    height: sceneH,
+                    strokeColor: "transparent",
+                    backgroundColor: "transparent",
+                } as any);
+            });
+
             const userContent = [...images, ...embeddables]; // items to preserve & avoid overlapping
             let userContentBounds = null;
             if (userContent.length > 0) {
@@ -732,6 +836,7 @@ export async function executeCanvasTool(
         case "update_scene": {
             const { elements_json, elements: elementsArray, clear_first, pointer_x, pointer_y, pointer_label } = toolArgs;
             const mode = (clear_first || "no").toLowerCase().trim();
+            console.log(`[AI Tools] update_scene called: mode=${mode}, has_elements_json=${!!elements_json}, has_elements=${!!elementsArray}`);
 
             // ── Mode: clear_all — wipe everything
             if (mode === "clear_all" || mode === "clear") {
@@ -774,7 +879,7 @@ export async function executeCanvasTool(
             let inputElements: any[];
             try {
                 if (elements_json && typeof elements_json === "string") {
-                    inputElements = JSON.parse(elements_json);
+                    inputElements = safelyParseJSON(elements_json);
                 } else if (elementsArray && Array.isArray(elementsArray)) {
                     inputElements = elementsArray;
                 } else if (elements_json && Array.isArray(elements_json)) {
@@ -794,7 +899,7 @@ export async function executeCanvasTool(
             // Convert AI's simplified format → Excalidraw skeleton format
             const skeletons = toExcalidrawSkeleton(inputElements);
 
-            console.log("[AI Tools] Converting skeletons to Excalidraw elements:", skeletons);
+            console.log(`[AI Tools] Converting ${skeletons.length} skeletons to Excalidraw elements`);
 
             // Use Excalidraw's official converter for proper element creation
             // This handles text binding, arrow binding, IDs, versioning, etc.
@@ -806,7 +911,7 @@ export async function executeCanvasTool(
                 return { error: "Failed to convert elements: " + String(err) };
             }
 
-            console.log("[AI Tools] Converted elements:", newElements);
+            console.log(`[AI Tools] Converted ${newElements.length} elements (from ${inputElements.length} input)`);
 
             // Get current elements (optionally clear first)
             let existingElements: any[] = [];
@@ -859,8 +964,11 @@ export async function executeCanvasTool(
                 }
             }
 
+            const finalElements = [...existingElements, ...newElements];
+            console.log(`[AI Tools] updateScene: ${existingElements.length} existing + ${newElements.length} new = ${finalElements.length} total`);
+
             excalidrawApi.updateScene({
-                elements: [...existingElements, ...newElements],
+                elements: finalElements,
             });
 
             // Auto-scroll and zoom to fit all content in the viewport
@@ -873,9 +981,14 @@ export async function executeCanvasTool(
                 });
             } catch (e) { }
 
+            // Verify elements were actually added
+            const sceneAfter = excalidrawApi.getSceneElements();
+            console.log(`[AI Tools] Scene now has ${sceneAfter.length} elements after updateScene`);
+
             return {
                 success: true,
                 addedCount: newElements.length,
+                totalOnCanvas: sceneAfter.length,
                 message: `Drew ${newElements.length} elements on the canvas.`,
             };
         }
@@ -1019,12 +1132,12 @@ export async function executeCanvasTool(
                 // Don't render SVG board anymore - we use the interactive HTML board instead
                 // Just dispatch event to update the interactive board
                 window.dispatchEvent(new CustomEvent('chess-board-updated'));
-                
+
                 // Remove old SVG chess board from canvas if it exists
                 const oldId = Chess.getBoardElementId();
                 if (oldId) {
                     let existingElements = [...excalidrawApi.getSceneElements()];
-                    existingElements = existingElements.filter((e: any) => 
+                    existingElements = existingElements.filter((e: any) =>
                         e.id !== oldId && e.fileId !== oldId.replace('_el', '')
                     );
                     excalidrawApi.updateScene({ elements: existingElements });
@@ -1036,33 +1149,33 @@ export async function executeCanvasTool(
 
             if (action === "start" || action === "reset") {
                 const playerColorChoice = String(toolArgs?.player_color || "").toLowerCase().trim();
-                
+
                 // Validate player color choice
                 if (playerColorChoice !== 'white' && playerColorChoice !== 'black') {
-                    return { 
-                        error: "player_color is required for 'start' action. Ask the user: 'Would you like to play as White or Black?' Then call again with player_color='white' or player_color='black'." 
+                    return {
+                        error: "player_color is required for 'start' action. Ask the user: 'Would you like to play as White or Black?' Then call again with player_color='white' or player_color='black'."
                     };
                 }
-                
+
                 const state = Chess.startGame(playerColorChoice as Chess.Color);
-                
+
                 // Apply custom colors if provided
                 if (toolArgs?.light_color || toolArgs?.dark_color || toolArgs?.border_color) {
                     Chess.setBoardColors(toolArgs.light_color, toolArgs.dark_color, toolArgs.border_color);
                 }
-                
+
                 const err = renderChessBoard(state);
                 if (err) return err;
-                
+
                 const aiColor = Chess.getAiColor();
                 const isAiTurn = Chess.isAiTurn();
-                
+
                 // Dispatch event to show interactive chess board
                 window.dispatchEvent(new CustomEvent('chess-game-started'));
-                
+
                 // Expose Chess module globally for ChessBoard component
                 (window as any).Chess = Chess;
-                
+
                 return {
                     success: true,
                     message: `Chess game started! User is playing ${playerColorChoice}, you (AI) are playing ${aiColor}. ${state.turn} moves first. ${isAiTurn ? "It's YOUR turn - make a move!" : "It's the user's turn - wait for their move."}`,
@@ -1081,20 +1194,20 @@ export async function executeCanvasTool(
 
                 // Execute move with full validation
                 const result = Chess.makeMove(from, to, toolArgs?.promotion);
-                
+
                 // Log validation result for debugging
                 const movingColor = Chess.getState()?.turn === 'white' ? 'black' : 'white'; // Color that just moved
                 const wasAiMove = movingColor === Chess.getAiColor();
                 console.log(`[Chess] Move attempt: ${from} → ${to} (${wasAiMove ? 'AI' : 'Player'}), Result:`, result.ok ? 'VALID' : 'REJECTED', result.error || result.notation);
-                
+
                 if (!result.ok) return { error: result.error };
 
                 const err = renderChessBoard(result.state);
                 if (err) return err;
-                
+
                 const isAiTurn = Chess.isAiTurn();
                 const isPlayerTurn = Chess.isPlayerTurn();
-                
+
                 let statusMsg = '';
                 if (result.state.status === 'checkmate') {
                     statusMsg = `Checkmate! ${result.state.winner} wins! ${result.state.winner === Chess.getAiColor() ? 'You (AI) won!' : 'User won!'}`;
@@ -1105,7 +1218,7 @@ export async function executeCanvasTool(
                 } else {
                     statusMsg = `${result.state.turn} to move. ${isAiTurn ? "It's YOUR turn - make your move!" : "It's the user's turn - wait for their move."}`;
                 }
-                
+
                 return {
                     success: true,
                     notation: result.notation,
@@ -1122,8 +1235,8 @@ export async function executeCanvasTool(
             }
 
             if (action === "ai_move") {
-                return { 
-                    error: "AI move is disabled. You must make all moves using action='move' with from/to parameters. Use action='valid_moves' to see legal moves for any piece." 
+                return {
+                    error: "AI move is disabled. You must make all moves using action='move' with from/to parameters. Use action='valid_moves' to see legal moves for any piece."
                 };
             }
 
@@ -1148,10 +1261,10 @@ export async function executeCanvasTool(
             if (action === "state") {
                 const state = Chess.getState();
                 if (!state) return { error: "No game in progress. Use action='start' first." };
-                
+
                 const isAiTurn = Chess.isAiTurn();
                 const isPlayerTurn = Chess.isPlayerTurn();
-                
+
                 return {
                     success: true,
                     turn: state.turn,

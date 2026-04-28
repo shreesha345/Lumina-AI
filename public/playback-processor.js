@@ -8,12 +8,18 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         this.writePos = 0;
         this.readPos = 0;
 
+        // Buffering state to prevent cracking
+        this.playing = false;
+        // Wait for ~150ms of audio before starting playback
+        this.bufferThreshold = 24000 * 0.15;
+
         this.port.onmessage = (e) => {
             if (e.data === "clear") {
                 // Interruption — fully reset
                 this.ringBuffer.fill(0);
                 this.writePos = 0;
                 this.readPos = 0;
+                this.playing = false;
                 return;
             }
 
@@ -40,20 +46,28 @@ class PlaybackProcessor extends AudioWorkletProcessor {
 
         const channel = output[0];
         const len = channel.length;
+        let buffered = this.writePos - this.readPos;
+
+        // Start playing when we've buffered enough, stop if we run dry
+        if (!this.playing && buffered >= this.bufferThreshold) {
+            this.playing = true;
+        } else if (this.playing && buffered === 0) {
+            this.playing = false;
+        }
 
         for (let i = 0; i < len; i++) {
-            if (this.readPos < this.writePos) {
+            if (this.playing && this.readPos < this.writePos) {
                 channel[i] = this.ringBuffer[this.readPos % this.capacity];
                 this.readPos++;
             } else {
-                channel[i] = 0;
+                channel[i] = 0; // Fill with silence
             }
         }
 
         // Prevent unbounded index growth — normalize both positions periodically
         // Only when indices are very large (no data corruption since we use modulo)
         if (this.readPos > this.capacity * 100) {
-            const buffered = this.writePos - this.readPos;
+            buffered = this.writePos - this.readPos;
             this.readPos = this.readPos % this.capacity;
             this.writePos = this.readPos + buffered;
         }

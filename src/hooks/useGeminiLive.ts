@@ -1,12 +1,13 @@
-import { useRef, useState, useCallback, useEffect } from "react";
+import { useRef, useState, useCallback, useEffect, useMemo } from "react";
 import { GoogleGenAI, Modality, StartSensitivity, EndSensitivity } from "@google/genai";
 import { exportToBlob } from "@excalidraw/excalidraw";
 import {
     canvasToolDeclarations,
+    ExcalidrawAPI,
     executeCanvasTool,
-    type ExcalidrawAPI,
 } from "../services/aiTools";
 import { executeDrawingAgent } from "../services/canvasAgent";
+import { readMemory, writeMemory, updateMemory } from "../services/userMemory";
 import { geminiLiveSystemInstruction } from "../prompts";
 
 const API_KEY = (import.meta as any).env.VITE_GEMINI_API_KEY || "";
@@ -131,8 +132,8 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
     const toolCallInProgressRef = useRef(false);
     const toolCallQueueRef = useRef<any[]>([]);
 
-    // Mute audio/screen sending during tool call processing to prevent 1011 errors
-    const sendingPausedRef = useRef(false);
+    // Keepalive timer ref — sends silent audio during long tool executions to prevent server timeout
+    const toolKeepaliveTimerRef = useRef<number | null>(null);
 
     // Whether the mic is "live" (sending audio to Gemini) — toggled by PTT
     const micLiveRef = useRef(false);
@@ -161,12 +162,18 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
         }
         playContextRef.current = ctx;
 
-        try { await ctx.audioWorklet.addModule("/playback-processor.js"); } catch (e) { return; }
+        try {
+            await ctx.audioWorklet.addModule("/playback-processor.js");
+        } catch (e) {
+            console.error("[Gemini Live] Failed to load playback-processor.js:", e);
+            return;
+        }
         if (ctx.state === "closed") return;
 
         const playNode = new AudioWorkletNode(ctx, "playback-processor");
         playWorkletRef.current = playNode;
         playNode.connect(ctx.destination);
+        console.log("[Gemini Live] Playback engine ready (24kHz)");
     }, []);
 
     const stopPlaybackEngine = useCallback(() => {
@@ -293,7 +300,6 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
     const startScreenFrameStream = useCallback(() => {
         stopScreenFrameStream();
         screenFrameTimerRef.current = window.setInterval(() => {
-            if (sendingPausedRef.current) return;
             const video = videoRef.current;
             if (!video || video.videoWidth === 0 || video.videoHeight === 0) return;
 
@@ -507,6 +513,50 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
         }
     }, [analyzeImageViaRest, getPdfSelectionContext, sendImageFrameToLiveSession]);
 
+    // ─── Keepalive: send a tiny silent audio frame to prevent WebSocket idle timeout ───
+    const KEEPALIVE_INTERVAL_MS = 3000;
+    // 160 samples of silence = 10ms at 16kHz, encoded as base64 PCM16
+    const SILENT_AUDIO_BASE64 = useMemo(() => {
+        const buf = new ArrayBuffer(320); // 160 PCM16 samples = 320 bytes
+        // All zeros = silence
+        return arrayBufferToBase64(buf);
+    }, []);
+
+    const startToolKeepalive = useCallback(() => {
+        // Clear any existing timer
+        if (toolKeepaliveTimerRef.current != null) {
+            window.clearInterval(toolKeepaliveTimerRef.current);
+        }
+        toolKeepaliveTimerRef.current = window.setInterval(() => {
+            const session = sessionRef.current;
+            if (!session || !isSocketOpen(session)) {
+                // Session gone — stop keepalive
+                if (toolKeepaliveTimerRef.current != null) {
+                    window.clearInterval(toolKeepaliveTimerRef.current);
+                    toolKeepaliveTimerRef.current = null;
+                }
+                return;
+            }
+            try {
+                session.sendRealtimeInput({
+                    audio: {
+                        data: SILENT_AUDIO_BASE64,
+                        mimeType: "audio/pcm;rate=16000",
+                    },
+                });
+            } catch {
+                // Ignore — connection may have just closed
+            }
+        }, KEEPALIVE_INTERVAL_MS);
+    }, [SILENT_AUDIO_BASE64]);
+
+    const stopToolKeepalive = useCallback(() => {
+        if (toolKeepaliveTimerRef.current != null) {
+            window.clearInterval(toolKeepaliveTimerRef.current);
+            toolKeepaliveTimerRef.current = null;
+        }
+    }, []);
+
     // ─── Process a single tool call message ───
     const processToolCall = useCallback(
         async (toolCallMessage: any) => {
@@ -514,8 +564,10 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
             if (!session || !toolCallMessage.toolCall?.functionCalls) return;
 
             setIsDrawing(true);
-            // Pause mic/screen sending during tool execution to avoid overwhelming the session
-            sendingPausedRef.current = true;
+            // Start a keepalive timer so the WebSocket doesn't idle-timeout
+            // while we await potentially slow tool execution (e.g. canvas agent API calls).
+            // Mic and screen frame streaming continue normally — no pausing.
+            startToolKeepalive();
             console.log("[Gemini Live] Tool call received:", toolCallMessage.toolCall.functionCalls);
 
             const functionResponses: any[] = [];
@@ -546,9 +598,40 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
                         if (api) {
                             const request = fc.args?.request || "";
                             console.log(`[Gemini Live] Delegating to canvas agent: "${request}"`);
-                            result = await executeDrawingAgent(request, api);
+
+                            let screenBase64: string | undefined = undefined;
+                            const video = videoRef.current;
+                            if (video && screenStreamRef.current) {
+                                screenBase64 = captureFrameFromVideo(video) || undefined;
+                                if (screenBase64) {
+                                    console.log("[Gemini Live] Captured screen layout for drawing agent.");
+                                }
+                            }
+
+                            result = await executeDrawingAgent(request, api, screenBase64);
                         } else {
                             result = { error: "Canvas API not available" };
+                        }
+                    } else if (fc.name === "read_memory") {
+                        const mem = await readMemory();
+                        if (mem) {
+                            result = { success: true, profile: mem, message: "User memory loaded successfully." };
+                        } else {
+                            result = { success: false, message: "No existing user memory found. This might be a first-time user." };
+                        }
+                    } else if (fc.name === "write_memory") {
+                        const success = await writeMemory(fc.args || {});
+                        if (success) {
+                            result = { success: true, message: "User memory saved successfully." };
+                        } else {
+                            result = { error: "Failed to write user memory." };
+                        }
+                    } else if (fc.name === "update_memory") {
+                        const success = await updateMemory(fc.args || {});
+                        if (success) {
+                            result = { success: true, message: "User memory updated successfully." };
+                        } else {
+                            result = { error: "Failed to update user memory." };
                         }
                     } else {
                         const api = excalidrawApiRef.current;
@@ -563,8 +646,6 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
                     result = { error: err.message || "Tool execution failed" };
                 }
 
-                // For view_screen the result is already final (no _screenCapture indirection)
-
                 console.log(`[Gemini Live] Tool result for ${fc.name}:`, result);
 
                 functionResponses.push({
@@ -573,6 +654,9 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
                     response: result,
                 });
             }
+
+            // Stop keepalive — we're about to send the tool response
+            stopToolKeepalive();
 
             // Send tool response back to the model
             try {
@@ -586,10 +670,9 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
                 console.error("[Gemini Live] Failed to send tool response:", err?.message || err);
             }
 
-            sendingPausedRef.current = false;
             setIsDrawing(false);
         },
-        [captureCanvasSnapshot, capturePdfSelection, captureScreenSnapshot, excalidrawApiRef]
+        [captureCanvasSnapshot, capturePdfSelection, captureScreenSnapshot, excalidrawApiRef, startToolKeepalive, stopToolKeepalive]
     );
 
     // ─── Handle tool calls with queue to prevent overlapping ───
@@ -683,7 +766,7 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
                             // Clear queued tool calls that were cancelled
                             toolCallQueueRef.current = [];
                             toolCallInProgressRef.current = false;
-                            sendingPausedRef.current = false;
+                            stopToolKeepalive();
                             setIsDrawing(false);
                             return;
                         }
@@ -729,6 +812,8 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
                                         playWorkletRef.current.port.postMessage(arrayBuffer, [
                                             arrayBuffer,
                                         ]);
+                                    } else {
+                                        console.warn("[Gemini Live] Audio data received but playback engine not initialized");
                                     }
                                 }
                             }
@@ -748,7 +833,7 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
                         // Clear any pending tool calls
                         toolCallQueueRef.current = [];
                         toolCallInProgressRef.current = false;
-                        sendingPausedRef.current = false;
+                        stopToolKeepalive();
 
                         // Clean up mic
                         teardownMicPipeline();
@@ -783,7 +868,7 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
             restoreWebSocket?.();
             connectingRef.current = false;
         }
-    }, [handleToolCall, stopPlaybackEngine]);
+    }, [handleToolCall, stopPlaybackEngine, stopToolKeepalive]);
 
 
 
@@ -820,7 +905,6 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
         micWorklet.port.onmessage = (e) => {
             // Only send when mic is live AND not paused for tool calls
             if (!micLiveRef.current) return;
-            if (sendingPausedRef.current) return;
 
             const session = sessionRef.current;
             if (!session) return;
@@ -977,7 +1061,8 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
         teardownMicPipeline();
         setIsRecording(false);
         stopPlaybackEngine();
-    }, [teardownMicPipeline, stopPlaybackEngine, stopScreenFrameStream]);
+        stopToolKeepalive();
+    }, [teardownMicPipeline, stopPlaybackEngine, stopScreenFrameStream, stopToolKeepalive]);
 
     return {
         isConnected,

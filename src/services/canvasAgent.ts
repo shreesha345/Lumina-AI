@@ -51,7 +51,7 @@ const toolAgentTools = [
                 elements_json: {
                     type: Type.STRING,
                     description:
-                        'JSON array string of elements. Each needs type, x, y. Shapes support label.text. Example: [{"type":"rectangle","id":"a","x":100,"y":100,"width":200,"height":80,"backgroundColor":"#a5d8ff","fillStyle":"solid","label":{"text":"Box"}}]',
+                        'JSON array string of elements. Each needs type, x, y. Shapes support label.text. Example: [{"type":"rectangle","id":"a","x":100,"y":100,"width":200,"height":80,"backgroundColor":"#a5d8ff","fillStyle":"solid","label":{"text":"Box"}}]. CRITICAL: Must be valid JSON. DO NOT use unescaped newlines (\\n) inside strings.',
                 },
                 pointer_x: { type: Type.STRING, description: "X coord for pointer" },
                 pointer_y: { type: Type.STRING, description: "Y coord for pointer" },
@@ -82,8 +82,8 @@ const toolAgentTools = [
         },
     },
     {
-        name: "get_canvas",
-        description: "Returns all elements currently on the canvas as JSON.",
+        name: "inspect_canvas",
+        description: "Returns all elements currently on the canvas, including their bounding boxes and coordinates (x, y, width, height). Use this tool to find the exact location of PDFs, images, videos, or existing drawings so you can place your new visuals carefully without overlapping them.",
         parameters: {
             type: Type.OBJECT,
             properties: {},
@@ -126,59 +126,73 @@ const TOOL_AGENT_SYSTEM = `You are a world-class visual canvas agent. You create
 
 You have two drawing tools. Choosing the RIGHT one is critical:
 
-## ⚠️ TOOL SELECTION — FOLLOW THIS EXACTLY
+## ⚠️ TOOL SELECTION — EXCALIDRAW vs. SVG
 
 ┌─────────────────────────────────────────────────────────────┐
-│  QUESTION 1: Does the request involve animation or motion?  │
-│  (animated, moving, orbiting, pulsing, rotating, spinning,  │
-│   flowing, beating, waving, etc.)                           │
+│  EXCALIDRAW (update_scene) LIMITATIONS & USE CASES          │
 │                                                             │
-│  YES → use add_svg (ONLY SVG can animate. Period.)          │
-│  NO  → go to Question 2                                     │
+│  CRITICAL LIMITATION: Excalidraw uses a complex JSON        │
+│  format. Large, complex diagrams with many nodes, precise   │
+│  coordinates, or intricate routing frequently fail to parse │
+│  or render correctly due to LLM JSON generation limits.     │
+│                                                             │
+│  ONLY use Excalidraw for:                                   │
+│  ✓ Very simple flowcharts (under 10 nodes)                  │
+│  ✓ Basic mind maps or process flows                         │
+│  ✓ Simple comparison tables                                 │
+│                                                             │
+│  DO NOT use Excalidraw if the diagram requires:             │
+│  - Many interconnected shapes                               │
+│  - Precise grid alignments or complex spacing               │
+│  - Custom shapes that aren't strictly boxes/diamonds/circles│
 ├─────────────────────────────────────────────────────────────┤
-│  QUESTION 2: Is it a structured layout?                     │
-│  (flowchart, mind map, matrix, table, architecture,         │
-│   tree, step-by-step math, sequence diagram, state machine) │
+│  SVG (add_svg) CAPABILITIES & USE CASES                     │
 │                                                             │
-│  YES → use update_scene (Excalidraw — HIGHLY RECOMMENDED    │
-│         for boxes + arrows + text layouts)                   │
-│  NO  → go to Question 3                                     │
+│  SVG is incredibly robust, flexible, and doesn't suffer     │
+│  from Excalidraw's strict JSON schema limitations.          │
+│                                                             │
+│  USE SVG FOR:                                               │
+│  1. COMPLEX STATIC DIAGRAMS — Architecture diagrams, system │
+│     designs, complex flowcharts, timelines, ecosystems,     │
+│     and detailed labeled diagrams.                          │
+│  2. ANIMATIONS — any motion/movement                        │
+│  3. ICONS & LOGOS — small symbolic graphics                 │
+│  4. CREATIVE ART — artistic drawings and illustrations      │
+│                                                             │
+│  SVG is highly recommended for any diagram that goes beyond │
+│  a few basic shapes or requires high reliability.           │
 ├─────────────────────────────────────────────────────────────┤
-│  QUESTION 3: Everything else — rich illustrations           │
-│  (science diagrams, math graphs, creative art, biology,     │
-│   chemistry, physics, curves, gradients, organic shapes,    │
-│   detailed drawings, icons)                                 │
+│  DECISION FLOWCHART:                                        │
 │                                                             │
-│  → use add_svg (SVG handles detail, curves, gradients       │
-│     far better than Excalidraw's limited shapes)            │
+│  Q1: Is it complex, highly structured, or > 10 elements?    │
+│      YES → add_svg                                          │
+│      NO  → Q2                                               │
+│                                                             │
+│  Q2: Does it need animation or custom artistic shapes?      │
+│      YES → add_svg                                          │
+│      NO  → update_scene (Excalidraw) for simple diagrams    │
 └─────────────────────────────────────────────────────────────┘
 
 Summary:
-- add_svg supports BOTH static AND animated SVGs
-- update_scene (Excalidraw JSON) supports ONLY static structured layouts — NO animation capability whatsoever
-- NEVER attempt animation with update_scene. It will silently fail.
-- NEVER use update_scene for illustrations that need curves, gradients, or fine detail — Excalidraw is limited to basic geometric shapes.
-- DO use update_scene when the visual is primarily boxes, arrows, and text — it excels there.
-- Keep outputs simple and neat; avoid generating duplicate visuals.
+- ALWAYS use add_svg for complex static diagrams, detailed flowcharts, architecture maps, and animations.
+- Excalidraw JSON is fragile and struggles with scale. Use it ONLY for basic, simple diagrams.
+- If in doubt, or if you predict a large output → use add_svg.
 
 ## VISUAL QUALITY STANDARDS (MANDATORY)
-- **Vibrant colors always.** Never black & white. Use gradients (\`<linearGradient>\`, \`<radialGradient>\`) for depth.
-- **Visual polish:** drop shadows, rounded shapes, varying stroke widths, subtle transparency.
-- **Layer elements:** backgrounds → mid-ground → foreground.
-- **Size generously:** SVGs 400–700px. Diagrams should fill available space.
+- **Vibrant colors always.** Never black & white. Use Excalidraw's rich palette of pastels and strokes.
+- **Visual polish:** rounded shapes, varying stroke widths, background zones for grouping.
 - **Color semantics:** Blue=info, Green=success, Yellow=decision, Red=danger, Purple=special.
+- **Size generously:** Diagrams should fill available space. Min shape size 120×60.
 
-## ANIMATION RULES (SVG ONLY)
+## ANIMATION RULES (SVG ONLY — rare cases)
 - Use SMIL: \`<animate>\`, \`<animateTransform>\`, \`<animateMotion>\`, \`<set>\`
 - Or CSS \`@keyframes\` + \`animation:\` inside \`<style>\`
 - \`repeatCount="indefinite"\` for loops, \`dur="2s"\`–\`dur="4s"\` for pleasant speed
 - System auto-detects animated SVGs → renders as live draggable overlay panels
 - Use animation only if the user asked for it or motion is essential to explanation
-- Prefer one animation overlay at a time unless user explicitly requests multiple
-- Keep animation overlays away from core diagram labels/content (no clutter/overlap)
 
 ## GENERAL RULES
-- **Call get_canvas ONLY if you need to check existing content** (e.g., for updates/edits). For new drawings, skip it and draw immediately.
+- **CRITICAL LAYOUT RULE**: Before you place any new drawing, ALWAYS call \`inspect_canvas\` first if you suspect there is a PDF, image, or existing diagram on the canvas, so you know exactly what coordinates to avoid.
 - For update/edit requests, prefer targeted cleanup with clear_canvas_selection instead of clearing everything.
 - Use clear_canvas_selection mode='group' or mode='ids' when replacing one diagram section; use mode='bbox' only when IDs/groups are unavailable.
 - If images or embeddable elements (YouTube videos, iframes) exist, place new content to the RIGHT with 150px+ spacing.
@@ -197,7 +211,8 @@ ${skillsDoc}
 
 export async function executeDrawingAgent(
     request: string,
-    excalidrawApi: ExcalidrawAPI
+    excalidrawApi: ExcalidrawAPI,
+    screenBase64?: string
 ): Promise<{ success: boolean; message: string }> {
     if (USE_VERTEX_AI && !VERTEX_API_KEY && !API_KEY) {
         return { success: false, message: "Missing Vertex AI API key configuration" };
@@ -212,10 +227,17 @@ export async function executeDrawingAgent(
     const MAX_DRAW_CALLS = 1;
 
     try {
+        // Build initial request payload
+        const userParts: any[] = [{ text: request }];
+        if (screenBase64) {
+            userParts.push({ text: "Here is a snapshot of my current screen. Please notice where the PDF or any user content is located, and draw your visual in the empty canvas space to avoid overlapping them." });
+            userParts.push({ inlineData: { mimeType: "image/jpeg", data: screenBase64 } });
+        }
+
         // Initial request to the tool agent
         let response = await ai.models.generateContent({
             model: TOOL_MODEL,
-            contents: [{ role: "user", parts: [{ text: request }] }],
+            contents: [{ role: "user", parts: userParts }],
             config: {
                 systemInstruction: TOOL_AGENT_SYSTEM,
                 tools: [{ functionDeclarations: toolAgentTools }],
@@ -252,11 +274,16 @@ export async function executeDrawingAgent(
                 let result: any;
                 try {
                     const isDrawingTool = fc.name === "update_scene" || fc.name === "add_svg";
+                    // Allow replacement draws (clear_first='yes') — the model is improving its output.
+                    // Only block duplicate appends (clear_first='no') after the first draw.
+                    const clearFirst = String(fc.args?.clear_first || "no").toLowerCase().trim();
+                    const isReplacement = clearFirst === "yes";
+                    const shouldSkipDuplicate = isDrawingTool && drawingCallCount >= MAX_DRAW_CALLS && !isReplacement;
 
-                    if (isDrawingTool && drawingCallCount >= MAX_DRAW_CALLS) {
+                    if (shouldSkipDuplicate) {
                         result = {
                             skipped: true,
-                            reason: "Only one drawing operation is allowed per request to keep output clean and non-duplicative.",
+                            reason: "Only one appending drawing operation is allowed per request. Use clear_first='yes' to replace the previous drawing.",
                         };
                     } else if (isDrawingTool && animationRequested && fc.name !== "add_svg") {
                         result = {
