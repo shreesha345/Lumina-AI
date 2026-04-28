@@ -11,7 +11,7 @@ Lumina is an AI-powered interactive tutor that combines **real-time voice conver
 
 ## Features
 
-- **Real-time voice interaction** — Talk to Lumina using your microphone. Supports push-to-talk (hold click or `Ctrl+Space`) and toggle mode.
+- **Real-time voice interaction** — Talk to Lumina using your microphone. Supports click-to-talk (click once to start, click again to send) and hands-free mode (toggle with Ctrl+H).
 - **Interactive whiteboard** — Full Excalidraw canvas with shapes, arrows, text, freehand drawing, and image upload.
 - **AI-driven diagram generation** — Lumina draws flowcharts, mind maps, architecture diagrams, waveforms, SVG illustrations, and educational visuals directly on the canvas.
 - **Canvas awareness** — The AI can view (screenshot) and inspect (structured data) everything on the canvas, including user-uploaded images. New drawings are automatically placed beside existing content to avoid overlap.
@@ -57,7 +57,7 @@ The voice manager has three tools:
 ### Prerequisites
 
 - **Node.js** 18+
-- A **Google Gemini API key** with access to the Live API
+- Google Cloud project access for **Vertex AI Generative AI**
 
 ### Installation
 
@@ -72,7 +72,14 @@ npm install
 Create a `.env` file in the project root:
 
 ```env
+VITE_GOOGLE_GENAI_USE_VERTEXAI=true
+VITE_VERTEX_API_KEY=your_vertex_api_key_here
+VITE_GOOGLE_CLOUD_PROJECT=your_gcp_project_id
+VITE_GOOGLE_CLOUD_LOCATION=global
+
+# Optional fallback if Vertex mode is disabled
 VITE_GEMINI_API_KEY=your_gemini_api_key_here
+
 VITE_GEMINI_LIVE_MODEL=gemini-2.5-flash-native-audio-preview-12-2025
 VITE_GEMINI_TOOL_MODEL=gemini-3.1-flash-lite-preview
 VITE_GEMINI_VISION_MODEL=gemini-2.5-flash
@@ -147,7 +154,7 @@ skills/                     # Excalidraw diagram skill files
 
 1. **Connect** — Click the mic button to connect to Gemini Live.
 2. **Upload a PDF** (optional) — Drag a research paper onto the sidebar. Lumina will use it as context.
-3. **Talk** — Hold the mic button (or press `Ctrl+Space`) and ask Lumina to explain something or draw a diagram.
+3. **Talk** — Click the mic button once to start recording, speak your message, then click again to send. Or press Ctrl+H for hands-free mode.
 4. **Draw on the canvas** — You can also draw directly on the whiteboard. Lumina can see what you draw via the `view_canvas` tool.
 5. **Upload images** — Drop images onto the canvas. Lumina will place new drawings beside them without overlapping.
 6. **Open PDF on canvas** — After upload, click **Open PDF On Canvas**. You can zoom, switch pages, and drag to mark a region.

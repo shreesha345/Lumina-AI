@@ -7,11 +7,31 @@ import skillsDoc from "../skills.md?raw";
 import { executeCanvasTool, type ExcalidrawAPI } from "./aiTools";
 
 const API_KEY = (import.meta as any).env.VITE_GEMINI_API_KEY || "";
-const TOOL_MODEL = (import.meta as any).env.VITE_GEMINI_TOOL_MODEL || "gemini-3.1-flash-lite-preview";
+const VERTEX_API_KEY = (import.meta as any).env.VITE_VERTEX_API_KEY || "";
+const GOOGLE_CLOUD_PROJECT = (import.meta as any).env.VITE_GOOGLE_CLOUD_PROJECT || "";
+const GOOGLE_CLOUD_LOCATION = (import.meta as any).env.VITE_GOOGLE_CLOUD_LOCATION_TOOLS || (import.meta as any).env.VITE_GOOGLE_CLOUD_LOCATION || "global";
+const USE_VERTEX_AI =
+    ((import.meta as any).env.VITE_GOOGLE_GENAI_USE_VERTEXAI || "").toLowerCase() === "true";
+const TOOL_MODEL = (import.meta as any).env.VITE_GEMINI_TOOL_MODEL || "gemini-2.0-flash-exp";
 const TOOL_THINKING_BUDGET_RAW = (import.meta as any).env.VITE_GEMINI_TOOL_THINKING_BUDGET;
 const TOOL_THINKING_BUDGET = Number.isFinite(Number(TOOL_THINKING_BUDGET_RAW))
     ? Number(TOOL_THINKING_BUDGET_RAW)
     : 0;
+
+function createGenAIClient() {
+    if (USE_VERTEX_AI) {
+        const baseUrl = GOOGLE_CLOUD_LOCATION && GOOGLE_CLOUD_LOCATION !== "global"
+            ? `https://${GOOGLE_CLOUD_LOCATION}-aiplatform.googleapis.com/`
+            : `https://aiplatform.googleapis.com/`;
+        return new GoogleGenAI({
+            vertexai: true,
+            apiKey: VERTEX_API_KEY || API_KEY,
+            httpOptions: { baseUrl },
+        });
+    }
+
+    return new GoogleGenAI({ apiKey: API_KEY });
+}
 
 // ─── Tool declarations the agent can call ───
 
@@ -158,7 +178,7 @@ Summary:
 - Keep animation overlays away from core diagram labels/content (no clutter/overlap)
 
 ## GENERAL RULES
-- **ALWAYS call get_canvas FIRST** to see existing content and avoid overlapping.
+- **Call get_canvas ONLY if you need to check existing content** (e.g., for updates/edits). For new drawings, skip it and draw immediately.
 - For update/edit requests, prefer targeted cleanup with clear_canvas_selection instead of clearing everything.
 - Use clear_canvas_selection mode='group' or mode='ids' when replacing one diagram section; use mode='bbox' only when IDs/groups are unavailable.
 - If images or embeddable elements (YouTube videos, iframes) exist, place new content to the RIGHT with 150px+ spacing.
@@ -179,11 +199,15 @@ export async function executeDrawingAgent(
     request: string,
     excalidrawApi: ExcalidrawAPI
 ): Promise<{ success: boolean; message: string }> {
-    if (!API_KEY) {
+    if (USE_VERTEX_AI && !VERTEX_API_KEY && !API_KEY) {
+        return { success: false, message: "Missing Vertex AI API key configuration" };
+    }
+
+    if (!USE_VERTEX_AI && !API_KEY) {
         return { success: false, message: "Missing API key" };
     }
 
-    const ai = new GoogleGenAI({ apiKey: API_KEY });
+    const ai = createGenAIClient();
     const animationRequested = /\b(animat(e|ed|ion)|moving|motion|orbit(ing)?|rotat(e|ing|ion)|puls(e|ing)|flow(ing)?|spin(ning)?|wave|beat(ing)?)\b/i.test(request);
     const MAX_DRAW_CALLS = 1;
 
@@ -201,7 +225,7 @@ export async function executeDrawingAgent(
 
         const executedTools: string[] = [];
         let iterations = 0;
-        const MAX_ITERATIONS = 6;
+        const MAX_ITERATIONS = 3; // Reduced from 6 to 3 for faster response
         // Count how many drawing tool calls have been executed
         let drawingCallCount = 0;
 

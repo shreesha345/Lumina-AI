@@ -10,10 +10,72 @@ import { executeDrawingAgent } from "../services/canvasAgent";
 import { geminiLiveSystemInstruction } from "../prompts";
 
 const API_KEY = (import.meta as any).env.VITE_GEMINI_API_KEY || "";
-const MODEL = (import.meta as any).env.VITE_GEMINI_LIVE_MODEL || "gemini-2.5-flash-native-audio-preview-12-2025";
+const VERTEX_API_KEY = (import.meta as any).env.VITE_VERTEX_API_KEY || "";
+const GOOGLE_CLOUD_PROJECT = (import.meta as any).env.VITE_GOOGLE_CLOUD_PROJECT || "";
+const GOOGLE_CLOUD_LOCATION_LIVE = (import.meta as any).env.VITE_GOOGLE_CLOUD_LOCATION_LIVE || (import.meta as any).env.VITE_GOOGLE_CLOUD_LOCATION || "global";
+const GOOGLE_CLOUD_LOCATION_TOOLS = (import.meta as any).env.VITE_GOOGLE_CLOUD_LOCATION_TOOLS || (import.meta as any).env.VITE_GOOGLE_CLOUD_LOCATION || "global";
+const USE_VERTEX_AI =
+    ((import.meta as any).env.VITE_GOOGLE_GENAI_USE_VERTEXAI || "").toLowerCase() === "true";
+const MODEL = (import.meta as any).env.VITE_GEMINI_LIVE_MODEL || "gemini-live-2.5-flash-native-audio";
 const VISION_MODEL = (import.meta as any).env.VITE_GEMINI_VISION_MODEL || "gemini-2.5-flash"; // REST fallback model for image analysis if direct live image send is unavailable
 const SCREEN_FRAME_INTERVAL_MS = 1200;
 const liveFunctionDeclarations = canvasToolDeclarations.filter((d: any) => d.name !== "view_screen");
+
+function createGenAIClient() {
+    if (USE_VERTEX_AI) {
+        const baseUrl = GOOGLE_CLOUD_LOCATION_TOOLS && GOOGLE_CLOUD_LOCATION_TOOLS !== "global"
+            ? `https://${GOOGLE_CLOUD_LOCATION_TOOLS}-aiplatform.googleapis.com/`
+            : `https://aiplatform.googleapis.com/`;
+        return new GoogleGenAI({
+            vertexai: true,
+            apiKey: VERTEX_API_KEY || API_KEY,
+            httpOptions: { baseUrl },
+        });
+    }
+
+    return new GoogleGenAI({ apiKey: API_KEY });
+}
+
+// ─── Vertex AI Live browser workaround ───
+// The browser WebSocket constructor cannot send custom headers.
+// The SDK sets the API key via headers, so it never reaches the Vertex endpoint → 1008 close.
+// Workaround: temporarily patch globalThis.WebSocket to append the API key as a URL query
+// parameter (same pattern the SDK uses for the Gemini API path).
+// The patch is removed immediately after the connection is established.
+function patchWebSocketForVertexAuth(): (() => void) | null {
+    if (!USE_VERTEX_AI) return null;
+    const apiKey = VERTEX_API_KEY || API_KEY;
+    if (!apiKey) return null;
+
+    // Determine the correct regional WebSocket host
+    const wsHost = GOOGLE_CLOUD_LOCATION_LIVE && GOOGLE_CLOUD_LOCATION_LIVE !== "global"
+        ? `${GOOGLE_CLOUD_LOCATION_LIVE}-aiplatform.googleapis.com`
+        : `aiplatform.googleapis.com`;
+
+    const OriginalWebSocket = globalThis.WebSocket;
+    const PatchedWebSocket = function (this: WebSocket, url: string | URL, protocols?: string | string[]) {
+        let urlStr = typeof url === "string" ? url : url.toString();
+        // Fix double-slash from SDK base URL trailing slash + /ws path
+        urlStr = urlStr.replace("://aiplatform.googleapis.com//", "://aiplatform.googleapis.com/");
+        // Rewrite global endpoint to regional if needed
+        if (wsHost !== "aiplatform.googleapis.com") {
+            urlStr = urlStr.replace("://aiplatform.googleapis.com/", `://${wsHost}/`);
+        }
+        if (urlStr.includes("aiplatform.googleapis.com") && !urlStr.includes("key=")) {
+            urlStr += (urlStr.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(apiKey);
+        }
+        return new OriginalWebSocket(urlStr, protocols);
+    } as unknown as typeof WebSocket;
+    // Preserve static members so instanceof / readyState constants still work
+    Object.defineProperty(PatchedWebSocket, "prototype", { value: OriginalWebSocket.prototype, writable: false });
+    Object.defineProperty(PatchedWebSocket, "CONNECTING", { value: OriginalWebSocket.CONNECTING, writable: false });
+    Object.defineProperty(PatchedWebSocket, "OPEN", { value: OriginalWebSocket.OPEN, writable: false });
+    Object.defineProperty(PatchedWebSocket, "CLOSING", { value: OriginalWebSocket.CLOSING, writable: false });
+    Object.defineProperty(PatchedWebSocket, "CLOSED", { value: OriginalWebSocket.CLOSED, writable: false });
+
+    globalThis.WebSocket = PatchedWebSocket;
+    return () => { globalThis.WebSocket = OriginalWebSocket; };
+}
 
 function arrayBufferToBase64(buffer: ArrayBuffer) {
     let binary = "";
@@ -139,10 +201,33 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
         }
     }, []);
 
+    // ─── Manual activity signals (required when automaticActivityDetection is disabled) ───
+    const sendActivityStart = useCallback(() => {
+        const session = sessionRef.current;
+        if (!session || !isSocketOpen(session)) return;
+        try {
+            session.sendRealtimeInput({ activityStart: {} });
+            console.log("[Gemini Live] Sent activityStart");
+        } catch (err: any) {
+            console.warn("[Gemini Live] Failed to send activityStart:", err?.message || err);
+        }
+    }, []);
+
+    const sendActivityEnd = useCallback(() => {
+        const session = sessionRef.current;
+        if (!session || !isSocketOpen(session)) return;
+        try {
+            session.sendRealtimeInput({ activityEnd: {} });
+            console.log("[Gemini Live] Sent activityEnd");
+        } catch (err: any) {
+            console.warn("[Gemini Live] Failed to send activityEnd:", err?.message || err);
+        }
+    }, []);
+
     // ─── Analyze an image via Gemini REST API (since native audio model can't receive images) ───
     const analyzeImageViaRest = useCallback(async (base64Data: string, mimeType: string, prompt: string): Promise<string> => {
         try {
-            const ai = new GoogleGenAI({ apiKey: API_KEY });
+            const ai = createGenAIClient();
             const response = await ai.models.generateContent({
                 model: VISION_MODEL,
                 contents: [{
@@ -237,19 +322,19 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
                 preferCurrentTab: true,
             });
             screenStreamRef.current = stream;
-            
+
             const video = document.createElement("video");
             video.autoplay = true;
             video.playsInline = true;
             video.muted = true;
             video.srcObject = stream;
-            
+
             await new Promise<void>((resolve) => {
                 video.onloadedmetadata = () => {
                     video.play().then(() => resolve()).catch(() => resolve());
                 };
             });
-            
+
             videoRef.current = video;
             setIsScreenSharing(true);
             // Stream frames directly to Gemini Live so it can see the screen natively.
@@ -540,18 +625,30 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
         if (sessionRef.current || connectingRef.current) return;
         connectingRef.current = true;
 
-        if (!API_KEY) {
-            console.error("Missing VITE_GEMINI_API_KEY in .env");
-            alert("Missing VITE_GEMINI_API_KEY in environment variables (.env)");
+        const effectiveKey = USE_VERTEX_AI ? (VERTEX_API_KEY || API_KEY) : API_KEY;
+        if (!effectiveKey) {
+            const missing = USE_VERTEX_AI ? "VITE_VERTEX_API_KEY" : "VITE_GEMINI_API_KEY";
+            console.error(`Missing ${missing} in .env`);
+            alert(`Missing ${missing} in environment variables (.env)`);
+            connectingRef.current = false;
             return;
         }
 
+        // Patch WebSocket so the API key is sent as a URL query param (browser limitation workaround)
+        const restoreWebSocket = patchWebSocketForVertexAuth();
+
         try {
-            const ai = new GoogleGenAI({ apiKey: API_KEY });
-            console.log("[Gemini Live] Connecting via Gemini API");
+            const ai = createGenAIClient();
+            console.log(USE_VERTEX_AI ? "[Gemini Live] Connecting via Vertex AI" : "[Gemini Live] Connecting via Gemini API");
+
+            // Vertex AI needs the fully-qualified model resource path;
+            // the browser SDK can't build it (no project/location on client).
+            const liveModel = USE_VERTEX_AI
+                ? `projects/${GOOGLE_CLOUD_PROJECT}/locations/${GOOGLE_CLOUD_LOCATION_LIVE}/publishers/google/models/${MODEL}`
+                : MODEL;
 
             const session = await ai.live.connect({
-                model: MODEL,
+                model: liveModel,
                 config: {
                     responseModalities: [Modality.AUDIO],
                     systemInstruction: geminiLiveSystemInstruction,
@@ -564,11 +661,7 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
                     },
                     realtimeInputConfig: {
                         automaticActivityDetection: {
-                            disabled: false,
-                            startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_LOW,
-                            endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_LOW,
-                            prefixPaddingMs: 20,
-                            silenceDurationMs: 300,
+                            disabled: true, // Disable automatic VAD - user controls when to send via button
                         },
                     },
                     tools: [
@@ -686,6 +779,8 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
         } catch (e) {
             console.error("Error connecting to Gemini", e);
         } finally {
+            // Restore original WebSocket constructor after connection is established
+            restoreWebSocket?.();
             connectingRef.current = false;
         }
     }, [handleToolCall, stopPlaybackEngine]);
@@ -785,24 +880,29 @@ export function useGeminiLive({ excalidrawApiRef, getPdfSelectionContext }: UseG
             // Enable sending — audio data will start flowing to Gemini
             micLiveRef.current = true;
 
+            // Tell the model the user started speaking (required with manual VAD)
+            sendActivityStart();
+
             setIsRecording(true);
         } catch (err) {
             console.error("Error accessing microphone", err);
         }
-    }, [isConnected, startPlaybackEngine, ensureMicPipeline]);
+    }, [isConnected, startPlaybackEngine, ensureMicPipeline, sendActivityStart]);
 
     // ─── Stop recording (push-to-talk release) ───
     const stopRecording = useCallback(() => {
         // Stop sending audio but keep the pipeline alive.
         micLiveRef.current = false;
-        // Flush stream when mic is paused (recommended with automatic VAD).
+        // Signal that the user stopped speaking so the model responds (required with manual VAD)
+        sendActivityEnd();
+        // Also flush the audio stream.
         sendAudioStreamEndSignal();
 
         setIsRecording(false);
         if (!isHandsFreeMode) {
             setIsProcessing(true);
         }
-    }, [isHandsFreeMode, sendAudioStreamEndSignal]);
+    }, [isHandsFreeMode, sendActivityEnd, sendAudioStreamEndSignal]);
 
     const toggleRecording = useCallback(() => {
         if (isRecording) {

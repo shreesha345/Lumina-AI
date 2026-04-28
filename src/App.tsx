@@ -614,7 +614,7 @@ function App() {
   }, [animatedSvg]);
 
   // Voice recognition (Gemini Live API)
-  // Push-to-talk: Hold mouse button or Ctrl+Space to record
+  // Click-to-talk: Click once to start recording, click again to stop and send
   // Hands-free: Toggle with Ctrl+H for continuous listening
   const holdTimerRef = useRef<any>(null);
   const isHoldingRef = useRef(false);
@@ -623,31 +623,27 @@ function App() {
     // In hands-free mode, clicking does nothing (always listening)
     if (isHandsFreeMode) return;
     
-    // In push-to-talk mode, clicking does nothing (must hold)
-    // This prevents accidental clicks from toggling recording
-    return;
-  }, [isHandsFreeMode]);
-
-  const handleVoiceButtonDown = useCallback(() => {
-    if (isHandsFreeMode) return;
-    
-    // Start push-to-talk immediately on mouse down
-    isHoldingRef.current = true;
-    voiceStateRef.current.mode = 'push';
-    startRecording();
-  }, [isHandsFreeMode, startRecording]);
-
-  const handleVoiceButtonUp = useCallback(() => {
-    if (isHandsFreeMode) return;
-    
-    isHoldingRef.current = false;
-    
-    // Stop recording when button is released
-    if (voiceStateRef.current.mode === 'push') {
+    // Click-to-talk: Toggle recording on/off
+    if (isRecording) {
+      // Stop recording and send to AI
       voiceStateRef.current.mode = null;
       stopRecording();
+    } else {
+      // Start recording
+      voiceStateRef.current.mode = 'click';
+      startRecording();
     }
-  }, [isHandsFreeMode, stopRecording]);
+  }, [isHandsFreeMode, isRecording, startRecording, stopRecording]);
+
+  const handleVoiceButtonDown = useCallback(() => {
+    // Disabled - we use click-to-talk now, not hold-to-talk
+    return;
+  }, []);
+
+  const handleVoiceButtonUp = useCallback(() => {
+    // Disabled - we use click-to-talk now, not hold-to-talk
+    return;
+  }, []);
 
   const handleHandsFreeOptionClick = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -666,32 +662,28 @@ function App() {
         return;
       }
 
-      // In hands-free mode, don't handle push-to-talk
+      // In hands-free mode, don't handle click-to-talk
       if (isHandsFreeMode) return;
 
-      // Ctrl+Space for push-to-talk
+      // Ctrl+Space for click-to-talk (toggle)
       if (e.ctrlKey && e.code === 'Space') {
         e.preventDefault();
-        // Start recording if not already recording
-        if (voiceStateRef.current.mode !== 'push') {
-          voiceStateRef.current.mode = 'push';
-          startRecording();
+        // Toggle recording on keydown (only once, not repeated)
+        if (!e.repeat) {
+          if (isRecording) {
+            voiceStateRef.current.mode = null;
+            stopRecording();
+          } else {
+            voiceStateRef.current.mode = 'click';
+            startRecording();
+          }
         }
       }
     };
 
     const handleKeyUp = (e) => {
-      // In hands-free mode, don't handle push-to-talk
-      if (isHandsFreeMode) return;
-      
-      // Release Ctrl+Space to stop recording
-      if (e.ctrlKey && e.code === 'Space') {
-        e.preventDefault();
-        if (voiceStateRef.current.mode === 'push') {
-          voiceStateRef.current.mode = null;
-          stopRecording();
-        }
-      }
+      // No action needed on key up for click-to-talk
+      return;
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -700,7 +692,7 @@ function App() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [isHandsFreeMode, startRecording, stopRecording, toggleHandsFreeMode]);
+  }, [isHandsFreeMode, isRecording, startRecording, stopRecording, toggleHandsFreeMode]);
 
   return (
     <div className="app-layout">
@@ -769,7 +761,7 @@ function App() {
                   {isHandsFreeMode
                     ? 'Hands-free mode: always listening (Ctrl+H to disable)'
                     : isConnected
-                      ? 'Push-to-talk: Hold button or Ctrl+Space to speak. Toggle hands-free: Ctrl+H'
+                      ? 'Click-to-talk: Click once to start, click again to send. Toggle hands-free: Ctrl+H'
                       : 'Connecting to Gemini Live...'}
                 </div>
                 <div className="voice-hover-menu">
@@ -811,8 +803,8 @@ function App() {
                     : isAudioProcessing
                       ? 'Processing...'
                       : isRecording
-                        ? (isHandsFreeMode ? 'Listening...' : 'Recording...')
-                        : (isConnected ? (isHandsFreeMode ? 'Hands-free Active' : 'Push to Talk') : 'Connecting...')}
+                        ? (isHandsFreeMode ? 'Listening...' : 'Recording... (Click to send)')
+                        : (isConnected ? (isHandsFreeMode ? 'Hands-free Active' : 'Click to Talk') : 'Connecting...')}
                 </span>
                 {isRecording && <div className="voice-pulse"></div>}
                 {isAudioProcessing && <div className="voice-pulse processing-pulse"></div>}
