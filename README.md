@@ -46,6 +46,9 @@ The voice manager has three tools:
 - `inspect_canvas` — returns structured element data (positions, types, dimensions)
 
 ---
+## diagram
+
+
 
 ## Tech Stack
 
