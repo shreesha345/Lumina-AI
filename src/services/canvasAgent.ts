@@ -3,7 +3,8 @@
 // Called by the Live agent (manager) via the draw_on_canvas tool.
 
 import { GoogleGenAI, Type } from "@google/genai";
-import skillsDoc from "../skills.md?raw";
+import skillsDoc from "../../skills/skills.md?raw";
+import excalidrawRefDoc from "../../skills/excalidraw-reference.md?raw";
 import { executeCanvasTool, type ExcalidrawAPI } from "./aiTools";
 
 const API_KEY = (import.meta as any).env.VITE_GEMINI_API_KEY || "";
@@ -205,7 +206,11 @@ Summary:
 
 === CANVAS SKILLS REFERENCE ===
 ${skillsDoc}
-=== END SKILLS REFERENCE ===`;
+=== END SKILLS REFERENCE ===
+
+=== EXCALIDRAW REFERENCE ===
+${excalidrawRefDoc}
+=== END EXCALIDRAW REFERENCE ===`;
 
 // ─── Execute a drawing request via the tool agent ───
 
