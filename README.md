@@ -12,7 +12,9 @@ Lumina is an AI-powered interactive tutor that combines **real-time voice conver
 
 <div align="center">
 
-[![Lumina AI Demo](https://img.youtube.com/vi/A9VmaBAIw64/0.jpg)](https://www.youtube.com/watch?v=A9VmaBAIw64)
+<a href="https://www.youtube.com/watch?v=A9VmaBAIw64">
+  <img src="https://img.youtube.com/vi/A9VmaBAIw64/0.jpg" width="800" alt="Lumina AI Demo"/>
+</a>
 
 </div>
 
