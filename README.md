@@ -12,8 +12,8 @@ Lumina is an AI-powered interactive tutor that combines **real-time voice conver
 
 <div align="center">
 
-<a href="https://www.youtube.com/watch?v=A9VmaBAIw64">
-  <img src="https://img.youtube.com/vi/A9VmaBAIw64/0.jpg" width="800" alt="Lumina AI Demo"/>
+<a href="https://youtu.be/Fdq8XGsbv34">
+  <img src="https://img.youtube.com/vi/Fdq8XGsbv34/0.jpg" width="800" alt="Lumina AI Demo"/>
 </a>
 
 </div>
@@ -48,7 +48,7 @@ The voice manager has three tools:
 ---
 ## diagram
 
-![Diagram Name](https://private-user-images.githubusercontent.com/71629361/563685809-b000e921-7769-4882-948a-2b7bd8946ce8.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NzM1NjM2MDAsIm5iZiI6MTc3MzU2MzMwMCwicGF0aCI6Ii83MTYyOTM2MS81NjM2ODU4MDktYjAwMGU5MjEtNzc2OS00ODgyLTk0OGEtMmI3YmQ4OTQ2Y2U4LnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjAzMTUlMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwMzE1VDA4MjgyMFomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPThhZmZkMTNlYTZjZGEzNWMxYTcxYWVhNzExOGE4YzZlMmE1NGNlOGNkNWM3MTZlYjE1ODhhOTE3YjJiZDEwYWEmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0In0.58eWFP_BxZgT3ii_3Cv3bzg3FETEDBfXBR0r8Arvlag)
+![Diagram Name](https://private-user-images.githubusercontent.com/71629361/585619045-b75d3bdf-092e-45b3-86bc-bf706deac183.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3Nzc0ODkzMTAsIm5iZiI6MTc3NzQ4OTAxMCwicGF0aCI6Ii83MTYyOTM2MS81ODU2MTkwNDUtYjc1ZDNiZGYtMDkyZS00NWIzLTg2YmMtYmY3MDZkZWFjMTgzLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjA0MjklMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwNDI5VDE4NTY1MFomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTM3NTYxZGIyOTQ4MTQzZTY5Yzc0ZDVmY2M3ZjVhNGNhNGM0MjRmMWU0NDRkNjQ5OGE1NTE2ZmY2MjA4NDUwMzEmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1pbWFnZSUyRnBuZyJ9._PDD0r094eaJZjeyEP8xoLnZINvTta_Z2ecrYbQT1Js)
 
 ## Tech Stack
 
