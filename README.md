@@ -8,6 +8,10 @@ Lumina is an AI-powered interactive tutor that combines **real-time voice conver
 ![Gemini](https://img.shields.io/badge/Gemini_AI-Live_API-orange)
 
 ---
+## Demo
+
+[![Lumina AI Demo](https://img.youtube.com/vi/A9VmaBAIw64/0.jpg)](https://www.youtube.com/watch?v=A9VmaBAIw64)
+
 
 ## Features
 
